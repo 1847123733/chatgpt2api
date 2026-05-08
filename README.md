@@ -1,3 +1,9 @@
+git tag v1.0.2
+git push origin v1.0.2
+
+上传 tag
+
+
 <h1 align="center">ChatGPT2API</h1>
 
 
