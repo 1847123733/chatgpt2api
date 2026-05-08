@@ -3,10 +3,8 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 import requests
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
-
-from api.support import require_identity
 
 REQUEST_TIMEOUT = 20
 ALLOWED_IMAGE_HOSTS = {
@@ -27,10 +25,7 @@ def create_router() -> APIRouter:
     @router.get("/api/image-proxy")
     async def proxy_image(
         url: str = Query(..., min_length=1),
-        authorization: str | None = Header(default=None),
     ):
-        require_identity(authorization)
-
         parsed = urlparse(url.strip())
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise HTTPException(status_code=400, detail="图片地址无效")
