@@ -161,6 +161,28 @@ export type SystemLog = {
   [key: string]: unknown;
 };
 
+export type PromptSquareItem = {
+  id: string;
+  rank: number;
+  title: string;
+  description: string;
+  prompt: string;
+  prompt_preview: string;
+  language: string;
+  languages: string[];
+  featured: boolean;
+  raycast_friendly: boolean;
+  preview_image_url: string;
+  image_urls: string[];
+  author_name: string;
+  author_url: string;
+  source_name: string;
+  source_url: string;
+  published_at: string;
+  try_link: string;
+  repo_entry_url: string;
+};
+
 export type ImageResponse = {
   created: number;
   data: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
@@ -252,6 +274,21 @@ export async function login(authKey: string) {
 
 export async function fetchAccounts() {
   return httpRequest<AccountListResponse>("/api/accounts");
+}
+
+export async function fetchPromptSquare(limit = 120, refresh = false) {
+  const params = new URLSearchParams();
+  params.set("limit", String(limit));
+  if (refresh) {
+    params.set("refresh", "true");
+  }
+  return httpRequest<{
+    source: { repo_url: string; readme_url: string; cover_image_url: string };
+    fetched_at: string;
+    total: number;
+    limit: number;
+    items: PromptSquareItem[];
+  }>(`/api/prompt-square?${params.toString()}`);
 }
 
 export async function createAccounts(tokens: string[]) {

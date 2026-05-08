@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { History, LoaderCircle, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import { ImageComposer } from "@/app/image/components/image-composer";
 import { ImageResults, type ImageLightboxItem } from "@/app/image/components/image-results";
@@ -338,6 +339,9 @@ async function recoverConversationHistory(items: ImageConversation[]) {
 
 
 function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const didLoadQuotaRef = useRef(false);
   const conversationsRef = useRef<ImageConversation[]>([]);
   const resultsViewportRef = useRef<HTMLDivElement>(null);
@@ -570,6 +574,22 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     resetComposer();
     textareaRef.current?.focus();
   };
+
+  useEffect(() => {
+    const promptFromSquare = searchParams.get("prompt");
+    if (!promptFromSquare) {
+      return;
+    }
+
+    setSelectedConversationId(null);
+    clearComposerInputs();
+    setImagePrompt(promptFromSquare);
+    setImageSize(searchParams.get("size") || "");
+    setImageCount(clampImageCount(searchParams.get("count") || "1"));
+    textareaRef.current?.focus();
+    toast.success("已从提示词广场应用到画图页");
+    router.replace(pathname, { scroll: false });
+  }, [clearComposerInputs, pathname, router, searchParams]);
 
   const handleDeleteConversation = async (id: string) => {
     const nextConversations = conversations.filter((item) => item.id !== id);
