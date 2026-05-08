@@ -72,9 +72,9 @@ export function TopNav() {
             href="/image"
             className="shrink-0 py-1 text-[15px] font-bold tracking-tight text-stone-950 transition hover:text-stone-700"
           >
-            chatgpt2api
+            gpt-image-2
           </Link>
-          <a
+          {/* <a
             href="https://github.com/basketikun/chatgpt2api"
             target="_blank"
             rel="noreferrer"
@@ -83,7 +83,7 @@ export function TopNav() {
           >
             <Github className="size-4" />
             <span className="hidden md:inline">GitHub</span>
-          </a>
+          </a> */}
           <button
             type="button"
             className="ml-auto shrink-0 py-1 text-xs text-stone-400 transition hover:text-stone-700 sm:hidden"
