@@ -49,12 +49,17 @@ def create_router(app_version: str) -> APIRouter:
     @router.post("/auth/login")
     async def login(authorization: str | None = Header(default=None)):
         identity = require_identity(authorization)
+        remaining_days = identity.get("remaining_days")
+        if not isinstance(remaining_days, int):
+            remaining_days = None
         return {
             "ok": True,
             "version": app_version,
             "role": identity.get("role"),
             "subject_id": identity.get("id"),
             "name": identity.get("name"),
+            "remaining_days": remaining_days,
+            "expires_at": identity.get("expires_at"),
         }
 
     @router.get("/version")

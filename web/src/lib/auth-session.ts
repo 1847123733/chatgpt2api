@@ -16,6 +16,8 @@ export async function getValidatedAuthSession(): Promise<StoredAuthSession | nul
       role: data.role,
       subjectId: data.subject_id,
       name: data.name,
+      expiresAt: data.expires_at ?? storedSession.expiresAt ?? null,
+      remainingDays: typeof data.remaining_days === "number" ? data.remaining_days : storedSession.remainingDays ?? null,
     };
     await setStoredAuthSession(nextSession);
     return nextSession;

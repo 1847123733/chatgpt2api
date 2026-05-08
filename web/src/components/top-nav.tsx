@@ -67,6 +67,10 @@ export function TopNav() {
   const navItems = session.role === "admin" ? adminNavItems : userNavItems;
   const roleLabel = session.role === "admin" ? "管理员" : "普通用户";
   const displayName = session.name.trim() || roleLabel;
+  const expiryLabel =
+    session.role === "user" && typeof session.remainingDays === "number"
+      ? `有效期剩余 ${Math.max(0, Math.floor(session.remainingDays))} 天`
+      : "";
 
   return (
     <header className="border-b border-stone-100/50">
@@ -120,6 +124,11 @@ export function TopNav() {
           <span className="hidden rounded-md bg-stone-100 px-2 py-1 text-[10px] font-medium text-stone-500 sm:inline-block sm:text-[11px]">
             {roleLabel} · {displayName}
           </span>
+          {expiryLabel ? (
+            <span className="hidden rounded-md bg-stone-100 px-2 py-1 text-[10px] font-medium text-stone-500 sm:inline-block sm:text-[11px]">
+              {expiryLabel}
+            </span>
+          ) : null}
           <span className="hidden rounded-md bg-stone-100 px-2 py-1 text-[10px] font-medium text-stone-500 sm:inline-block sm:text-[11px]">
             v{webConfig.appVersion}
           </span>

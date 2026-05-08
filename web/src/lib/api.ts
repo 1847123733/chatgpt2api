@@ -211,6 +211,8 @@ export type LoginResponse = {
   role: AuthRole;
   subject_id: string;
   name: string;
+  remaining_days?: number | null;
+  expires_at?: string | null;
 };
 
 export type UserKey = {
@@ -220,6 +222,8 @@ export type UserKey = {
   enabled: boolean;
   created_at: string | null;
   last_used_at: string | null;
+  expires_at?: string | null;
+  remaining_days?: number | null;
 };
 
 export type RegisterConfig = {
@@ -541,14 +545,17 @@ export async function fetchUserKeys() {
   return httpRequest<{ items: UserKey[] }>("/api/auth/users");
 }
 
-export async function createUserKey(name: string) {
+export async function createUserKey(name: string, validDays = 30) {
   return httpRequest<{ item: UserKey; key: string; items: UserKey[] }>("/api/auth/users", {
     method: "POST",
-    body: { name },
+    body: { name, valid_days: validDays },
   });
 }
 
-export async function updateUserKey(keyId: string, updates: { enabled?: boolean; name?: string; key?: string }) {
+export async function updateUserKey(
+  keyId: string,
+  updates: { enabled?: boolean; name?: string; key?: string; valid_days?: number; renew_days?: number },
+) {
   return httpRequest<{ item: UserKey; items: UserKey[] }>(`/api/auth/users/${keyId}`, {
     method: "POST",
     body: updates,

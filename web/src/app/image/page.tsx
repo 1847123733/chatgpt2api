@@ -1245,6 +1245,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
             imageCount={imageCount}
             imageSize={imageSize}
             availableQuota={availableQuota}
+            showAvailableQuota={isAdmin}
             activeTaskCount={activeTaskCount}
             referenceImages={referenceImages}
             textareaRef={textareaRef}

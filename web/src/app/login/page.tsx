@@ -33,6 +33,8 @@ export default function LoginPage() {
         role: data.role,
         subjectId: data.subject_id,
         name: data.name,
+        expiresAt: data.expires_at ?? null,
+        remainingDays: typeof data.remaining_days === "number" ? data.remaining_days : null,
       });
       router.replace(getDefaultRouteForRole(data.role));
     } catch (error) {

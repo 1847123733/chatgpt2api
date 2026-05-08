@@ -9,6 +9,8 @@ export type StoredAuthSession = {
   role: AuthRole;
   subjectId: string;
   name: string;
+  expiresAt?: string | null;
+  remainingDays?: number | null;
 };
 
 export const AUTH_KEY_STORAGE_KEY = "chatgpt2api_auth_key";
@@ -36,6 +38,8 @@ function normalizeSession(value: unknown, fallbackKey = ""): StoredAuthSession |
     role,
     subjectId: String(candidate.subjectId || "").trim(),
     name: String(candidate.name || "").trim(),
+    expiresAt: typeof candidate.expiresAt === "string" ? candidate.expiresAt : candidate.expiresAt ?? null,
+    remainingDays: typeof candidate.remainingDays === "number" ? candidate.remainingDays : candidate.remainingDays ?? null,
   };
 }
 

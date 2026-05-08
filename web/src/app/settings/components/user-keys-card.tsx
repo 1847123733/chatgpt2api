@@ -35,12 +35,21 @@ function formatDateTime(value?: string | null) {
   }).format(date);
 }
 
+function formatRemainingDays(value: unknown) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) {
+    return "—";
+  }
+  return `${Math.max(0, Math.floor(parsed))} 天`;
+}
+
 export function UserKeysCard() {
   const didLoadRef = useRef(false);
   const [items, setItems] = useState<UserKey[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [name, setName] = useState("");
+  const [validDays, setValidDays] = useState("30");
   const [isCreating, setIsCreating] = useState(false);
   const [pendingIds, setPendingIds] = useState<Set<string>>(() => new Set());
   const [revealedKey, setRevealedKey] = useState("");
@@ -48,6 +57,8 @@ export function UserKeysCard() {
   const [editingItem, setEditingItem] = useState<UserKey | null>(null);
   const [editName, setEditName] = useState("");
   const [editKey, setEditKey] = useState("");
+  const [renewingItem, setRenewingItem] = useState<UserKey | null>(null);
+  const [renewDays, setRenewDays] = useState("30");
 
   const load = async () => {
     setIsLoading(true);
@@ -72,7 +83,8 @@ export function UserKeysCard() {
   const handleCreate = async () => {
     setIsCreating(true);
     try {
-      const data = await createUserKey(name.trim());
+      const days = Math.max(1, Math.floor(Number(validDays) || 30));
+      const data = await createUserKey(name.trim(), days);
       setItems(data.items);
       setRevealedKey(data.key);
       setName("");
@@ -162,6 +174,25 @@ export function UserKeysCard() {
     }
   };
 
+  const handleRenew = async () => {
+    if (!renewingItem) {
+      return;
+    }
+    const item = renewingItem;
+    const days = Math.max(1, Math.floor(Number(renewDays) || 30));
+    setItemPending(item.id, true);
+    try {
+      const data = await updateUserKey(item.id, { renew_days: days });
+      setItems(data.items);
+      setRenewingItem(null);
+      toast.success("已续期");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "续期失败");
+    } finally {
+      setItemPending(item.id, false);
+    }
+  };
+
   const handleCopy = async (value: string) => {
     try {
       await navigator.clipboard.writeText(value);
@@ -233,6 +264,8 @@ export function UserKeysCard() {
                       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-500">
                         <span>创建时间 {formatDateTime(item.created_at)}</span>
                         <span>最近使用 {formatDateTime(item.last_used_at)}</span>
+                        <span>过期时间 {formatDateTime(item.expires_at)}</span>
+                        <span>剩余 {formatRemainingDays(item.remaining_days)}</span>
                       </div>
                     </div>
 
@@ -266,6 +299,19 @@ export function UserKeysCard() {
                       <Button
                         type="button"
                         variant="outline"
+                        className="h-9 rounded-xl border-stone-200 bg-white px-4 text-stone-700"
+                        onClick={() => {
+                          setRenewingItem(item);
+                          setRenewDays("30");
+                        }}
+                        disabled={isPending}
+                      >
+                        {isPending ? <LoaderCircle className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
+                        续期
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
                         className="h-9 rounded-xl border-rose-200 bg-white px-4 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
                         onClick={() => setDeletingItem(item)}
                         disabled={isPending}
@@ -290,14 +336,30 @@ export function UserKeysCard() {
               可选填写一个备注名称，方便区分不同使用者；创建后会生成一条只能查看一次的原始密钥。
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-stone-700">名称（可选）</label>
-            <Input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="例如：设计同学 A、运营临时账号"
-              className="h-11 rounded-xl border-stone-200 bg-white"
-            />
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-stone-700">名称（可选）</label>
+              <Input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="例如：设计同学 A、运营临时账号"
+                className="h-11 rounded-xl border-stone-200 bg-white"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-stone-700">有效期（天）</label>
+              <Input
+                value={validDays}
+                type="number"
+                min="1"
+                max="3650"
+                step="1"
+                onChange={(event) => setValidDays(event.target.value)}
+                placeholder="30"
+                className="h-11 rounded-xl border-stone-200 bg-white"
+              />
+              <p className="text-xs leading-5 text-stone-500">默认 30 天，可调整。到期后会自动禁用。</p>
+            </div>
           </div>
           <DialogFooter>
             <Button
@@ -413,6 +475,50 @@ export function UserKeysCard() {
             >
               {editingItem && pendingIds.has(editingItem.id) ? <LoaderCircle className="size-4 animate-spin" /> : <Pencil className="size-4" />}
               保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(renewingItem)} onOpenChange={(open) => (!open ? setRenewingItem(null) : null)}>
+        <DialogContent className="rounded-2xl p-6">
+          <DialogHeader className="gap-2">
+            <DialogTitle>续期用户密钥</DialogTitle>
+            <DialogDescription className="text-sm leading-6">
+              续期会在当前过期时间基础上顺延；如果已过期，则从现在开始重新计算。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-stone-700">续期天数</label>
+            <Input
+              value={renewDays}
+              type="number"
+              min="1"
+              max="3650"
+              step="1"
+              onChange={(event) => setRenewDays(event.target.value)}
+              placeholder="30"
+              className="h-11 rounded-xl border-stone-200 bg-white"
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="secondary"
+              className="h-10 rounded-xl bg-stone-100 px-5 text-stone-700 hover:bg-stone-200"
+              onClick={() => setRenewingItem(null)}
+              disabled={renewingItem ? pendingIds.has(renewingItem.id) : false}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800"
+              onClick={() => void handleRenew()}
+              disabled={renewingItem ? pendingIds.has(renewingItem.id) : false}
+            >
+              {renewingItem && pendingIds.has(renewingItem.id) ? <LoaderCircle className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
+              续期
             </Button>
           </DialogFooter>
         </DialogContent>
