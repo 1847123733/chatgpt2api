@@ -8,10 +8,22 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { fetchPromptSquare, type PromptSquareItem } from "@/lib/api";
+import webConfig from "@/constants/common-env";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 
 const allFilter = "全部";
 const featuredFilter = "Featured";
+
+function getPromptSquarePreviewSrc(url: string) {
+  const normalized = String(url || "").trim();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.startsWith("/api/image-proxy?")) {
+    return normalized;
+  }
+  return `${webConfig.apiUrl.replace(/\/$/, "")}/api/image-proxy?url=${encodeURIComponent(normalized)}`;
+}
 
 export default function PromptSquarePage() {
   const router = useRouter();
@@ -202,7 +214,11 @@ export default function PromptSquarePage() {
                   className="overflow-hidden rounded-[28px] border border-stone-200/80 bg-white shadow-[0_20px_70px_-45px_rgba(15,23,42,0.45)]"
                 >
                   <div className="relative aspect-[4/3] overflow-hidden bg-stone-100">
-                    <img src={item.preview_image_url} alt={item.title} className="h-full w-full object-cover" />
+                    <img
+                      src={getPromptSquarePreviewSrc(item.preview_image_url)}
+                      alt={item.title}
+                      className="h-full w-full object-cover"
+                    />
                     <div className="absolute left-4 top-4 flex flex-wrap gap-2">
                       <span className="rounded-full bg-black/55 px-3 py-1 text-xs font-medium text-white backdrop-blur-sm">
                         {item.language.toUpperCase()}
