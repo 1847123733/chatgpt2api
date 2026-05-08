@@ -275,6 +275,14 @@ export function ImageComposer({
             </div>
           </div>
         </div>
+        <p
+          className="px-4 pt-3 text-center text-sm italic tracking-[0.01em] text-stone-500 sm:px-6 sm:text-[15px]"
+          style={{
+            fontFamily: '"Palatino Linotype","Book Antiqua","URW Palladio L","Times New Roman",serif',
+          }}
+        >
+          在同一窗口里保留本地历史与任务状态，并从已有结果图继续发起新的无状态编辑。
+        </p>
       </div>
     </div>
   );

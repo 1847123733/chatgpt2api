@@ -97,7 +97,7 @@ export function ImageResults({
               fontFamily: '"Palatino Linotype","Book Antiqua","URW Palladio L","Times New Roman",serif',
             }}
           >
-            在同一窗口里保留本地历史与任务状态，并从已有结果图继续发起新的无状态编辑。
+            在同一个界面中完成灵感创作与 AI 绘图，让文字、艺术与视觉表达自然融合。
           </p>
         </div>
       </div>
