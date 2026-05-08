@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
+import { ImageLightbox } from "@/components/image-lightbox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { fetchPromptSquare, type PromptSquareItem } from "@/lib/api";
@@ -35,6 +36,8 @@ export default function PromptSquarePage() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [searchText, setSearchText] = useState("");
   const [activeFilter, setActiveFilter] = useState<string>(allFilter);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [lightboxIndex, setLightboxIndex] = useState(0);
 
   useEffect(() => {
     if (!session) {
@@ -96,6 +99,15 @@ export default function PromptSquarePage() {
       return haystack.includes(keyword);
     });
   }, [activeFilter, items, searchText]);
+
+  const lightboxImages = useMemo(
+    () =>
+      filteredItems.map((item) => ({
+        id: item.id,
+        src: getPromptSquarePreviewSrc(item.preview_image_url),
+      })),
+    [filteredItems],
+  );
 
   if (isCheckingAuth || !session) {
     return (
@@ -214,11 +226,25 @@ export default function PromptSquarePage() {
                   className="overflow-hidden rounded-[28px] border border-stone-200/80 bg-white shadow-[0_20px_70px_-45px_rgba(15,23,42,0.45)]"
                 >
                   <div className="relative aspect-[4/3] overflow-hidden bg-stone-100">
-                    <img
-                      src={getPromptSquarePreviewSrc(item.preview_image_url)}
-                      alt={item.title}
-                      className="h-full w-full object-cover"
-                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const currentIndex = filteredItems.findIndex((candidate) => candidate.id === item.id);
+                        if (currentIndex < 0) {
+                          return;
+                        }
+                        setLightboxIndex(currentIndex);
+                        setLightboxOpen(true);
+                      }}
+                      className="block h-full w-full cursor-zoom-in"
+                      aria-label={`放大查看 ${item.title}`}
+                    >
+                      <img
+                        src={getPromptSquarePreviewSrc(item.preview_image_url)}
+                        alt={item.title}
+                        className="h-full w-full object-cover transition duration-200 hover:scale-[1.02]"
+                      />
+                    </button>
                     <div className="absolute left-4 top-4 flex flex-wrap gap-2">
                       <span className="rounded-full bg-black/55 px-3 py-1 text-xs font-medium text-white backdrop-blur-sm">
                         {item.language.toUpperCase()}
@@ -302,6 +328,14 @@ export default function PromptSquarePage() {
           )}
         </div>
       </div>
+
+      <ImageLightbox
+        images={lightboxImages}
+        currentIndex={lightboxIndex}
+        open={lightboxOpen}
+        onOpenChange={setLightboxOpen}
+        onIndexChange={setLightboxIndex}
+      />
     </section>
   );
 }
