@@ -172,6 +172,8 @@ export type PromptSquareItem = {
   languages: string[];
   featured: boolean;
   raycast_friendly: boolean;
+  categories?: Array<{ slug: string; label: string }>;
+  category_groups?: Record<string, Array<{ slug: string; label: string }>>;
   preview_image_url: string;
   image_urls: string[];
   author_name: string;

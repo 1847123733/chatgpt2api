@@ -17,6 +17,106 @@ REQUEST_TIMEOUT = 20
 DEFAULT_LIMIT = 120
 MAX_LIMIT = 240
 
+CATEGORY_GROUPS: dict[str, list[tuple[str, str]]] = {
+    "use_cases": [
+        ("profile-avatar", "Profile / Avatar"),
+        ("social-media-post", "Social Media Post"),
+        ("infographic-edu-visual", "Infographic / Edu Visual"),
+        ("youtube-thumbnail", "YouTube Thumbnail"),
+        ("comic-storyboard", "Comic / Storyboard"),
+        ("product-marketing", "Product Marketing"),
+        ("ecommerce-main-image", "E-commerce Main Image"),
+        ("game-asset", "Game Asset"),
+        ("poster-flyer", "Poster / Flyer"),
+        ("app-web-design", "App / Web Design"),
+    ],
+    "style": [
+        ("photography", "Photography"),
+        ("cinematic-film-still", "Cinematic / Film Still"),
+        ("anime-manga", "Anime / Manga"),
+        ("illustration", "Illustration"),
+        ("sketch-line-art", "Sketch / Line Art"),
+        ("comic-graphic-novel", "Comic / Graphic Novel"),
+        ("3d-render", "3D Render"),
+        ("chibi-q-style", "Chibi / Q-Style"),
+        ("isometric", "Isometric"),
+        ("pixel-art", "Pixel Art"),
+        ("oil-painting", "Oil Painting"),
+        ("watercolor", "Watercolor"),
+        ("ink-chinese-style", "Ink / Chinese Style"),
+        ("retro-vintage", "Retro / Vintage"),
+        ("cyberpunk-sci-fi", "Cyberpunk / Sci-Fi"),
+        ("minimalism", "Minimalism"),
+    ],
+    "subjects": [
+        ("portrait-selfie", "Portrait / Selfie"),
+        ("influencer-model", "Influencer / Model"),
+        ("character", "Character"),
+        ("group-couple", "Group / Couple"),
+        ("product", "Product"),
+        ("food-drink", "Food / Drink"),
+        ("fashion-item", "Fashion Item"),
+        ("animal-creature", "Animal / Creature"),
+        ("vehicle", "Vehicle"),
+        ("architecture-interior", "Architecture / Interior"),
+        ("landscape-nature", "Landscape / Nature"),
+        ("cityscape-street", "Cityscape / Street"),
+        ("diagram-chart", "Diagram / Chart"),
+        ("text-typography", "Text / Typography"),
+        ("abstract-background", "Abstract / Background"),
+    ],
+}
+
+CATEGORY_LABELS = {
+    slug: label
+    for categories in CATEGORY_GROUPS.values()
+    for slug, label in categories
+}
+
+CATEGORY_KEYWORDS: dict[str, list[str]] = {
+    "profile-avatar": ["avatar", "profile", "vtuber", "emblem logo", "badge"],
+    "social-media-post": ["social media", "instagram", "post", "story", "feed"],
+    "infographic-edu-visual": ["infographic", "explainer", "educational", "diagram", "slide"],
+    "youtube-thumbnail": ["youtube", "thumbnail"],
+    "comic-storyboard": ["storyboard", "comic panel", "manga panel"],
+    "product-marketing": ["product marketing", "campaign", "advertising", "promotional"],
+    "ecommerce-main-image": ["e-commerce", "ecommerce", "main image", "product card", "shopping"],
+    "game-asset": ["game asset", "sprite", "game ui", "item icon"],
+    "poster-flyer": ["poster", "flyer", "billboard", "key visual"],
+    "app-web-design": ["app", "web design", "ui mockup", "interface"],
+    "photography": ["photography", "photo", "photorealistic", "realistic"],
+    "cinematic-film-still": ["cinematic", "film still", "movie still"],
+    "anime-manga": ["anime", "manga"],
+    "illustration": ["illustration", "illustrated"],
+    "sketch-line-art": ["sketch", "line art", "pencil drawing"],
+    "comic-graphic-novel": ["graphic novel", "comic"],
+    "3d-render": ["3d render", "3d", "rendered"],
+    "chibi-q-style": ["chibi", "q-style", "kawaii"],
+    "isometric": ["isometric"],
+    "pixel-art": ["pixel art"],
+    "oil-painting": ["oil painting"],
+    "watercolor": ["watercolor"],
+    "ink-chinese-style": ["ink", "chinese style", "shuimo"],
+    "retro-vintage": ["retro", "vintage"],
+    "cyberpunk-sci-fi": ["cyberpunk", "sci-fi", "science fiction"],
+    "minimalism": ["minimalist", "minimalism"],
+    "portrait-selfie": ["portrait", "selfie", "headshot"],
+    "influencer-model": ["influencer", "model", "fashion shoot"],
+    "character": ["character", "mascot"],
+    "group-couple": ["group", "couple", "friends"],
+    "product": ["product", "packshot"],
+    "food-drink": ["food", "drink", "beverage", "restaurant"],
+    "fashion-item": ["fashion", "clothing", "sneaker", "handbag"],
+    "animal-creature": ["animal", "creature"],
+    "vehicle": ["vehicle", "car", "motorcycle", "spaceship"],
+    "architecture-interior": ["architecture", "interior", "room", "building"],
+    "landscape-nature": ["landscape", "nature", "mountain", "forest"],
+    "cityscape-street": ["cityscape", "street", "urban"],
+    "diagram-chart": ["diagram", "chart", "callout", "flowchart"],
+    "text-typography": ["typography", "text rendering", "logo text", "lettering"],
+    "abstract-background": ["abstract", "background", "wallpaper"],
+}
+
 ENTRY_PATTERN = re.compile(
     r"### No\. (?P<rank>\d+): (?P<title>.*?)\n(?P<body>.*?)(?=\n---\n\n### No\. |\Z)",
     re.S,
@@ -63,6 +163,36 @@ def _build_item_id(rank: int, title: str, try_link: str, index: int) -> str:
             pass
     slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
     return f"awesome-gpt-image-2-{rank}-{slug or index}"
+
+
+def _slugify_category(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+
+
+def _category_groups(categories: list[str]) -> dict[str, list[dict[str, str]]]:
+    selected = set(categories)
+    return {
+        group: [{"slug": slug, "label": label} for slug, label in values if slug in selected]
+        for group, values in CATEGORY_GROUPS.items()
+    }
+
+
+def _infer_categories(title: str, description: str, prompt: str) -> list[dict[str, str]]:
+    found: list[str] = []
+    prefix = title.split(" - ", 1)[0].strip() if " - " in title else ""
+    if prefix:
+        slug = _slugify_category(prefix)
+        if slug in CATEGORY_LABELS:
+            found.append(slug)
+
+    text = f"{title} {description} {prompt}".lower()
+    for slug, keywords in CATEGORY_KEYWORDS.items():
+        if slug in found:
+            continue
+        if any(keyword in text for keyword in keywords):
+            found.append(slug)
+
+    return [{"slug": slug, "label": CATEGORY_LABELS[slug]} for slug in found if slug in CATEGORY_LABELS]
 
 
 @dataclass
@@ -158,6 +288,8 @@ class PromptSquareService:
             try_link_match = TRY_LINK_PATTERN.search(body)
             try_link = try_link_match.group("url").strip() if try_link_match else ""
             item_id = _build_item_id(rank, title, try_link, index)
+            categories = _infer_categories(title, description, prompt)
+            category_slugs = [category["slug"] for category in categories]
 
             items.append(
                 {
@@ -171,6 +303,8 @@ class PromptSquareService:
                     "languages": languages,
                     "featured": featured,
                     "raycast_friendly": raycast_friendly,
+                    "categories": categories,
+                    "category_groups": _category_groups(category_slugs),
                     "preview_image_url": preview_image,
                     "image_urls": image_urls,
                     "author_name": author_link["label"] if author_link else _strip_markdown_links(author_line.group("value")) if author_line else "",
