@@ -203,7 +203,7 @@ class AuthServiceTests(unittest.TestCase):
 
             with self.assertRaises(AuthError) as context:
                 service.authenticate(raw_key, session_id=str(first["session_id"]))
-            self.assertEqual(context.exception.code, "session_invalid")
+            self.assertEqual(context.exception.code, "session_revoked")
 
             relogin = service.authenticate(raw_key, allow_create_session=True)
             self.assertIsNotNone(relogin)

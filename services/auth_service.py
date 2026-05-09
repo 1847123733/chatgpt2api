@@ -93,6 +93,7 @@ class AuthService:
             "created_at": created_at,
             "last_used_at": last_used_at,
             "expires_at": expires_at,
+            "sessions_revoked_at": self._clean(raw.get("sessions_revoked_at")) or None,
             "max_sessions": max(1, min(100, max_sessions)) if role == "user" else 1,
             "sessions": normalized_sessions if role == "user" else [],
         }
@@ -315,6 +316,7 @@ class AuthService:
                 "created_at": _now_iso(),
                 "last_used_at": None,
                 "expires_at": expires_at,
+                "sessions_revoked_at": None,
                 "max_sessions": normalized_max_sessions,
                 "sessions": [],
             }
@@ -444,6 +446,8 @@ class AuthService:
                         active_sessions[session_index] = normalized_session
                         break
                     if normalized_session_id and not matched:
+                        if self._clean(next_item.get("sessions_revoked_at")):
+                            raise AuthError("session_revoked", "登录已被管理员强制退出，请重新手动登录")
                         raise AuthError("session_invalid", "登录会话已失效，请重新登录")
                     if not normalized_session_id:
                         if not allow_create_session:
@@ -520,6 +524,7 @@ class AuthService:
                     return None
                 next_item = dict(item)
                 next_item["sessions"] = []
+                next_item["sessions_revoked_at"] = _now_iso()
                 next_item, _ = self._prune_sessions_locked(next_item)
                 self._items[index] = next_item
                 self._save()
