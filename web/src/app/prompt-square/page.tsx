@@ -242,6 +242,8 @@ export default function PromptSquarePage() {
                       <img
                         src={getPromptSquarePreviewSrc(item.preview_image_url)}
                         alt={item.title}
+                        loading="lazy"
+                        decoding="async"
                         className="h-full w-full object-cover transition duration-200 hover:scale-[1.02]"
                       />
                     </button>
