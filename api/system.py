@@ -7,7 +7,8 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
-from api.support import require_admin, require_identity, resolve_image_base_url
+from api.support import extract_bearer_token, require_admin, require_identity, resolve_image_base_url
+from services.auth_service import auth_service
 from services.backup_service import BackupError, backup_service
 from services.config import config
 from services.image_service import delete_images, download_images_zip, get_image_download_response, get_thumbnail_response, list_images
@@ -47,8 +48,11 @@ def create_router(app_version: str) -> APIRouter:
     router = APIRouter()
 
     @router.post("/auth/login")
-    async def login(authorization: str | None = Header(default=None)):
-        identity = require_identity(authorization)
+    async def login(
+        authorization: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None, alias="x-session-id"),
+    ):
+        identity = require_identity(authorization, x_session_id, allow_create_session=not bool(str(x_session_id or "").strip()))
         remaining_days = identity.get("remaining_days")
         if not isinstance(remaining_days, int):
             remaining_days = None
@@ -60,7 +64,24 @@ def create_router(app_version: str) -> APIRouter:
             "name": identity.get("name"),
             "remaining_days": remaining_days,
             "expires_at": identity.get("expires_at"),
+            "session_id": identity.get("session_id"),
+            "max_sessions": identity.get("max_sessions"),
         }
+
+    @router.post("/auth/logout")
+    async def logout(
+        authorization: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None, alias="x-session-id"),
+    ):
+        identity = require_identity(authorization, x_session_id)
+        if identity.get("role") != "user":
+            return {"ok": True}
+        if not auth_service.logout_session(
+            extract_bearer_token(authorization),
+            str(x_session_id or "").strip(),
+        ):
+            raise HTTPException(status_code=404, detail={"error": "会话不存在或已退出"})
+        return {"ok": True}
 
     @router.get("/version")
     async def get_version():

@@ -6,6 +6,7 @@ import { Github } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 
 import webConfig from "@/constants/common-env";
+import { logout } from "@/lib/api";
 import { getValidatedAuthSession } from "@/lib/auth-session";
 import { cn } from "@/lib/utils";
 import { clearStoredAuthSession, type StoredAuthSession } from "@/store/auth";
@@ -14,6 +15,7 @@ const adminNavItems = [
   { href: "/image", label: "画图" },
   { href: "/prompt-square", label: "提示词广场" },
   { href: "/accounts", label: "号池管理" },
+  { href: "/user-keys", label: "用户密钥" },
   { href: "/register", label: "注册机" },
   { href: "/image-manager", label: "图片管理" },
   { href: "/logs", label: "日志管理" },
@@ -56,6 +58,13 @@ export function TopNav() {
   }, [pathname]);
 
   const handleLogout = async () => {
+    if (session?.key) {
+      try {
+        await logout(session.key, session.sessionId);
+      } catch {
+        // Ignore logout failures and clear local session anyway.
+      }
+    }
     await clearStoredAuthSession();
     router.replace("/login");
   };

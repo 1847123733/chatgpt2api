@@ -9,6 +9,7 @@ export type StoredAuthSession = {
   role: AuthRole;
   subjectId: string;
   name: string;
+  sessionId?: string | null;
   expiresAt?: string | null;
   remainingDays?: number | null;
 };
@@ -38,6 +39,7 @@ function normalizeSession(value: unknown, fallbackKey = ""): StoredAuthSession |
     role,
     subjectId: String(candidate.subjectId || "").trim(),
     name: String(candidate.name || "").trim(),
+    sessionId: typeof candidate.sessionId === "string" ? candidate.sessionId.trim() : candidate.sessionId ?? null,
     expiresAt: typeof candidate.expiresAt === "string" ? candidate.expiresAt : candidate.expiresAt ?? null,
     remainingDays: typeof candidate.remainingDays === "number" ? candidate.remainingDays : candidate.remainingDays ?? null,
   };

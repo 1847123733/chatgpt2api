@@ -1,8 +1,10 @@
 ARG BUILDPLATFORM
 ARG TARGETPLATFORM
 ARG TARGETARCH
+ARG NODE_IMAGE=node:22-alpine
+ARG PYTHON_IMAGE=python:3.13-slim
 
-FROM --platform=$BUILDPLATFORM node:22-alpine AS web-build
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS web-build
 
 WORKDIR /app/web
 
@@ -14,7 +16,7 @@ COPY web ./
 RUN NEXT_PUBLIC_APP_VERSION="$(cat /app/VERSION)" npm run build
 
 
-FROM --platform=$TARGETPLATFORM python:3.13-slim AS app
+FROM ${PYTHON_IMAGE} AS app
 
 ARG TARGETPLATFORM
 ARG TARGETARCH

@@ -6,7 +6,7 @@ from threading import Event, Thread
 from fastapi import HTTPException, Request
 
 from services.account_service import account_service
-from services.auth_service import auth_service
+from services.auth_service import AuthError, auth_service
 from services.config import config
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -27,20 +27,29 @@ def _legacy_admin_identity(token: str) -> dict[str, object] | None:
     return None
 
 
-def require_identity(authorization: str | None) -> dict[str, object]:
+def require_identity(authorization: str | None, session_id: str | None = None, *, allow_create_session: bool = False) -> dict[str, object]:
     token = extract_bearer_token(authorization)
-    identity = _legacy_admin_identity(token) or auth_service.authenticate(token)
+    try:
+        identity = _legacy_admin_identity(token) or auth_service.authenticate(
+            token,
+            session_id=session_id,
+            allow_create_session=allow_create_session,
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail={"error": exc.message, "code": exc.code}) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail={"error": str(exc)}) from exc
     if identity is None:
-        raise HTTPException(status_code=401, detail={"error": "密钥无效或已失效，请重新登录"})
+        raise HTTPException(status_code=401, detail={"error": "密钥无效或已失效，请重新登录", "code": "key_invalid"})
     return identity
 
 
-def require_auth_key(authorization: str | None) -> None:
-    require_identity(authorization)
+def require_auth_key(authorization: str | None, session_id: str | None = None) -> None:
+    require_identity(authorization, session_id=session_id)
 
 
-def require_admin(authorization: str | None) -> dict[str, object]:
-    identity = require_identity(authorization)
+def require_admin(authorization: str | None, session_id: str | None = None) -> dict[str, object]:
+    identity = require_identity(authorization, session_id=session_id)
     if identity.get("role") != "admin":
         raise HTTPException(status_code=403, detail={"error": "需要管理员权限才能执行这个操作"})
     return identity

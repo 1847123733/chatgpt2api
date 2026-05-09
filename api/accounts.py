@@ -27,6 +27,7 @@ from services.sub2api_service import (
 class UserKeyCreateRequest(BaseModel):
     name: str = ""
     valid_days: int = 30
+    max_sessions: int = 4
 
 
 class UserKeyUpdateRequest(BaseModel):
@@ -35,6 +36,7 @@ class UserKeyUpdateRequest(BaseModel):
     key: str | None = None
     valid_days: int | None = None
     renew_days: int | None = None
+    max_sessions: int | None = None
 
 
 class AccountCreateRequest(BaseModel):
@@ -106,7 +108,12 @@ def create_router() -> APIRouter:
     async def create_user_key(body: UserKeyCreateRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)
         try:
-            item, raw_key = auth_service.create_key(role="user", name=body.name, valid_days=body.valid_days)
+            item, raw_key = auth_service.create_key(
+                role="user",
+                name=body.name,
+                valid_days=body.valid_days,
+                max_sessions=body.max_sessions,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         return {"item": item, "key": raw_key, "items": auth_service.list_keys(role="user")}
@@ -126,6 +133,7 @@ def create_router() -> APIRouter:
                 "key": body.key,
                 "valid_days": body.valid_days,
                 "renew_days": body.renew_days,
+                "max_sessions": body.max_sessions,
             }.items()
             if value is not None
         }
@@ -135,6 +143,14 @@ def create_router() -> APIRouter:
             item = auth_service.update_key(key_id, updates, role="user")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        if item is None:
+            raise HTTPException(status_code=404, detail={"error": "这条用户密钥不存在，可能已经被删除"})
+        return {"item": item, "items": auth_service.list_keys(role="user")}
+
+    @router.post("/api/auth/users/{key_id}/clear-sessions")
+    async def clear_user_key_sessions(key_id: str, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        item = auth_service.clear_key_sessions(key_id, role="user")
         if item is None:
             raise HTTPException(status_code=404, detail={"error": "这条用户密钥不存在，可能已经被删除"})
         return {"item": item, "items": auth_service.list_keys(role="user")}

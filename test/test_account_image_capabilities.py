@@ -3,12 +3,13 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 os.environ.setdefault("CHATGPT2API_AUTH_KEY", "test-auth")
 
 from services.account_service import AccountService
-from services.auth_service import AuthService
+from services.auth_service import AuthError, AuthService
 from services.storage.json_storage import JSONStorageBackend
 from utils.helper import anonymize_token
 
@@ -88,11 +89,12 @@ class AuthServiceTests(unittest.TestCase):
             self.assertTrue(item["enabled"])
             self.assertTrue(raw_key.startswith("sk-"))
 
-            authed = service.authenticate(raw_key)
+            authed = service.authenticate(raw_key, allow_create_session=True)
             self.assertIsNotNone(authed)
             self.assertEqual(authed["id"], item["id"])
             self.assertEqual(authed["role"], "user")
             self.assertIsNotNone(authed["last_used_at"])
+            self.assertTrue(str(authed.get("session_id") or "").strip())
 
             updated = service.update_key(item["id"], {"enabled": False}, role="user")
             self.assertIsNotNone(updated)
@@ -113,7 +115,7 @@ class AuthServiceTests(unittest.TestCase):
 
             service._save = fail_save
 
-            authed = service.authenticate(raw_key)
+            authed = service.authenticate(raw_key, allow_create_session=True)
 
             self.assertIsNotNone(authed)
             self.assertEqual(authed["id"], item["id"])
@@ -127,9 +129,9 @@ class AuthServiceTests(unittest.TestCase):
             updated = service.update_key(item["id"], {"key": "sk-user-custom-key"}, role="user")
 
             self.assertIsNotNone(updated)
-            self.assertIsNone(service.authenticate(raw_key))
+            self.assertIsNone(service.authenticate(raw_key, allow_create_session=True))
 
-            authed = service.authenticate("sk-user-custom-key")
+            authed = service.authenticate("sk-user-custom-key", allow_create_session=True)
             self.assertIsNotNone(authed)
             self.assertEqual(authed["id"], item["id"])
 
@@ -148,6 +150,82 @@ class AuthServiceTests(unittest.TestCase):
             updated = service.update_key(first["id"], {"name": "Alice"}, role="user")
             self.assertIsNotNone(updated)
             self.assertEqual(updated["name"], "Alice")
+
+    def test_user_key_enforces_max_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AuthService(JSONStorageBackend(Path(tmp_dir) / "accounts.json", Path(tmp_dir) / "auth_keys.json"))
+            item, raw_key = service.create_key(role="user", name="Alice", max_sessions=2)
+
+            first = service.authenticate(raw_key, allow_create_session=True)
+            second = service.authenticate(raw_key, allow_create_session=True)
+
+            self.assertIsNotNone(first)
+            self.assertIsNotNone(second)
+            self.assertEqual(item["max_sessions"], 2)
+
+            with self.assertRaisesRegex(ValueError, "同时在线上限"):
+                service.authenticate(raw_key, allow_create_session=True)
+
+            self.assertTrue(service.logout_session(raw_key, str(first["session_id"])))
+            third = service.authenticate(raw_key, allow_create_session=True)
+            self.assertIsNotNone(third)
+
+    def test_user_session_must_match_after_login(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AuthService(JSONStorageBackend(Path(tmp_dir) / "accounts.json", Path(tmp_dir) / "auth_keys.json"))
+            _, raw_key = service.create_key(role="user", name="Alice")
+
+            first = service.authenticate(raw_key, allow_create_session=True)
+
+            self.assertIsNotNone(first)
+            session_id = str(first["session_id"])
+            with self.assertRaises(AuthError) as context:
+                service.authenticate(raw_key, session_id="wrong-session")
+            self.assertEqual(context.exception.code, "session_invalid")
+
+            validated = service.authenticate(raw_key, session_id=session_id)
+            self.assertIsNotNone(validated)
+            self.assertEqual(validated["session_id"], session_id)
+
+    def test_admin_can_clear_all_user_sessions_for_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AuthService(JSONStorageBackend(Path(tmp_dir) / "accounts.json", Path(tmp_dir) / "auth_keys.json"))
+            item, raw_key = service.create_key(role="user", name="Alice", max_sessions=2)
+
+            first = service.authenticate(raw_key, allow_create_session=True)
+            second = service.authenticate(raw_key, allow_create_session=True)
+
+            self.assertIsNotNone(first)
+            self.assertIsNotNone(second)
+            cleared = service.clear_key_sessions(item["id"], role="user")
+            self.assertIsNotNone(cleared)
+            self.assertEqual(cleared["active_sessions"], 0)
+
+            with self.assertRaises(AuthError) as context:
+                service.authenticate(raw_key, session_id=str(first["session_id"]))
+            self.assertEqual(context.exception.code, "session_invalid")
+
+            relogin = service.authenticate(raw_key, allow_create_session=True)
+            self.assertIsNotNone(relogin)
+
+    def test_user_key_only_expires_at_actual_expiry_time(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AuthService(JSONStorageBackend(Path(tmp_dir) / "accounts.json", Path(tmp_dir) / "auth_keys.json"))
+            item, raw_key = service.create_key(role="user", name="Alice")
+
+            future_expiry = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+            updated = service.update_key(item["id"], {"enabled": True}, role="user")
+            self.assertIsNotNone(updated)
+            service._items[0]["expires_at"] = future_expiry
+
+            authed = service.authenticate(raw_key, allow_create_session=True)
+            self.assertIsNotNone(authed)
+            self.assertGreaterEqual(int(authed["remaining_days"] or 0), 1)
+
+            service._items[0]["expires_at"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+            with self.assertRaises(AuthError) as context:
+                service.authenticate(raw_key, allow_create_session=True)
+            self.assertEqual(context.exception.code, "key_expired")
 
 
 if __name__ == "__main__":

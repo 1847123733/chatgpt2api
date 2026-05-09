@@ -36,8 +36,9 @@ def create_router() -> APIRouter:
     async def list_image_tasks(
         ids: str = Query(default=""),
         authorization: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None, alias="x-session-id"),
     ):
-        identity = require_identity(authorization)
+        identity = require_identity(authorization, x_session_id)
         return await run_in_threadpool(image_task_service.list_tasks, identity, _parse_task_ids(ids))
 
     @router.post("/api/image-tasks/generations")
@@ -45,8 +46,9 @@ def create_router() -> APIRouter:
         body: ImageGenerationTaskRequest,
         request: Request,
         authorization: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None, alias="x-session-id"),
     ):
-        identity = require_identity(authorization)
+        identity = require_identity(authorization, x_session_id)
         await filter_or_log(LoggedCall(identity, "/api/image-tasks/generations", body.model, "文生图任务", request_text=body.prompt), body.prompt)
         try:
             return await run_in_threadpool(
@@ -65,6 +67,7 @@ def create_router() -> APIRouter:
     async def create_edit_task(
         request: Request,
         authorization: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None, alias="x-session-id"),
         image: list[UploadFile] | None = File(default=None),
         image_list: list[UploadFile] | None = File(default=None, alias="image[]"),
         client_task_id: str = Form(...),
@@ -72,7 +75,7 @@ def create_router() -> APIRouter:
         model: str = Form(default="gpt-image-2"),
         size: str | None = Form(default=None),
     ):
-        identity = require_identity(authorization)
+        identity = require_identity(authorization, x_session_id)
         await filter_or_log(LoggedCall(identity, "/api/image-tasks/edits", model, "图生图任务", request_text=prompt), prompt)
         uploads = [*(image or []), *(image_list or [])]
         if not uploads:

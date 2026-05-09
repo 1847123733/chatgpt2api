@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Ban, CheckCircle2, Copy, KeyRound, LoaderCircle, Pencil, Plus, Trash2 } from "lucide-react";
+import { Ban, CheckCircle2, Copy, KeyRound, LoaderCircle, LogOut, Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -16,7 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { createUserKey, deleteUserKey, fetchUserKeys, updateUserKey, type UserKey } from "@/lib/api";
+import { clearUserKeySessions, createUserKey, deleteUserKey, fetchUserKeys, updateUserKey, type UserKey } from "@/lib/api";
 
 function formatDateTime(value?: string | null) {
   if (!value) {
@@ -50,6 +50,7 @@ export function UserKeysCard() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [name, setName] = useState("");
   const [validDays, setValidDays] = useState("30");
+  const [maxSessions, setMaxSessions] = useState("4");
   const [isCreating, setIsCreating] = useState(false);
   const [pendingIds, setPendingIds] = useState<Set<string>>(() => new Set());
   const [revealedKey, setRevealedKey] = useState("");
@@ -57,6 +58,7 @@ export function UserKeysCard() {
   const [editingItem, setEditingItem] = useState<UserKey | null>(null);
   const [editName, setEditName] = useState("");
   const [editKey, setEditKey] = useState("");
+  const [editMaxSessions, setEditMaxSessions] = useState("4");
   const [renewingItem, setRenewingItem] = useState<UserKey | null>(null);
   const [renewDays, setRenewDays] = useState("30");
 
@@ -84,10 +86,12 @@ export function UserKeysCard() {
     setIsCreating(true);
     try {
       const days = Math.max(1, Math.floor(Number(validDays) || 30));
-      const data = await createUserKey(name.trim(), days);
+      const sessions = Math.max(1, Math.floor(Number(maxSessions) || 4));
+      const data = await createUserKey(name.trim(), days, sessions);
       setItems(data.items);
       setRevealedKey(data.key);
       setName("");
+      setMaxSessions("4");
       setIsDialogOpen(false);
       toast.success("用户密钥已创建");
     } catch (error) {
@@ -144,6 +148,7 @@ export function UserKeysCard() {
     setEditingItem(item);
     setEditName(item.name);
     setEditKey("");
+    setEditMaxSessions(String(Math.max(1, Number(item.max_sessions) || 4)));
   };
 
   const handleEdit = async () => {
@@ -153,7 +158,8 @@ export function UserKeysCard() {
     const item = editingItem;
     const trimmedName = editName.trim();
     const trimmedKey = editKey.trim();
-    if (trimmedName === item.name && !trimmedKey) {
+    const normalizedMaxSessions = Math.max(1, Math.floor(Number(editMaxSessions) || 4));
+    if (trimmedName === item.name && !trimmedKey && normalizedMaxSessions === Math.max(1, Number(item.max_sessions) || 4)) {
       setEditingItem(null);
       return;
     }
@@ -162,11 +168,12 @@ export function UserKeysCard() {
       const data = await updateUserKey(item.id, {
         ...(trimmedName !== item.name ? { name: trimmedName } : {}),
         ...(trimmedKey ? { key: trimmedKey } : {}),
+        ...(normalizedMaxSessions !== Math.max(1, Number(item.max_sessions) || 4) ? { max_sessions: normalizedMaxSessions } : {}),
       });
       setItems(data.items);
       setEditingItem(null);
       setEditKey("");
-      toast.success(trimmedKey ? "用户密钥已更新" : "用户名称已更新");
+      toast.success(trimmedKey ? "用户密钥已更新" : "用户配置已更新");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "更新用户密钥失败");
     } finally {
@@ -188,6 +195,19 @@ export function UserKeysCard() {
       toast.success("已续期");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "续期失败");
+    } finally {
+      setItemPending(item.id, false);
+    }
+  };
+
+  const handleClearSessions = async (item: UserKey) => {
+    setItemPending(item.id, true);
+    try {
+      const data = await clearUserKeySessions(item.id);
+      setItems(data.items);
+      toast.success("已清空在线会话");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "清空在线会话失败");
     } finally {
       setItemPending(item.id, false);
     }
@@ -252,6 +272,7 @@ export function UserKeysCard() {
             <div className="space-y-3">
               {items.map((item) => {
                 const isPending = pendingIds.has(item.id);
+                const activeSessions = Math.max(0, Number(item.active_sessions) || 0);
                 return (
                   <div key={item.id} className="flex flex-col gap-3 rounded-xl border border-stone-200 bg-white px-4 py-4 md:flex-row md:items-center md:justify-between">
                     <div className="min-w-0 space-y-2">
@@ -266,10 +287,21 @@ export function UserKeysCard() {
                         <span>最近使用 {formatDateTime(item.last_used_at)}</span>
                         <span>过期时间 {formatDateTime(item.expires_at)}</span>
                         <span>剩余 {formatRemainingDays(item.remaining_days)}</span>
+                        <span>在线中 {activeSessions} / {Math.max(1, Number(item.max_sessions) || 4)}</span>
                       </div>
                     </div>
 
                     <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-9 rounded-xl border-amber-200 bg-white px-4 text-amber-700 hover:bg-amber-50 hover:text-amber-800"
+                        onClick={() => void handleClearSessions(item)}
+                        disabled={isPending || activeSessions === 0}
+                      >
+                        {isPending ? <LoaderCircle className="size-4 animate-spin" /> : <LogOut className="size-4" />}
+                        一键清空在线
+                      </Button>
                       <Button
                         type="button"
                         variant="outline"
@@ -347,6 +379,20 @@ export function UserKeysCard() {
               />
             </div>
             <div className="space-y-2">
+              <label className="text-sm font-medium text-stone-700">同时在线数</label>
+              <Input
+                value={maxSessions}
+                type="number"
+                min="1"
+                max="100"
+                step="1"
+                onChange={(event) => setMaxSessions(event.target.value)}
+                placeholder="4"
+                className="h-11 rounded-xl border-stone-200 bg-white"
+              />
+              <p className="text-xs leading-5 text-stone-500">默认 4 个。超过后，新设备登录会被拒绝。</p>
+            </div>
+            <div className="space-y-2">
               <label className="text-sm font-medium text-stone-700">有效期（天）</label>
               <Input
                 value={validDays}
@@ -421,6 +467,7 @@ export function UserKeysCard() {
           if (!open) {
             setEditingItem(null);
             setEditKey("");
+            setEditMaxSessions("4");
           }
         }}
       >
@@ -453,6 +500,20 @@ export function UserKeysCard() {
                 保存后旧密钥会立即失效，新密钥生效。系统仍只保存哈希，不会回显当前密钥。
               </p>
             </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-stone-700">同时在线数</label>
+              <Input
+                value={editMaxSessions}
+                type="number"
+                min="1"
+                max="100"
+                step="1"
+                onChange={(event) => setEditMaxSessions(event.target.value)}
+                placeholder="4"
+                className="h-11 rounded-xl border-stone-200 bg-white"
+              />
+              <p className="text-xs leading-5 text-stone-500">调整后会立即影响后续登录，当前已在线会话不会被自动踢下线。</p>
+            </div>
           </div>
           <DialogFooter>
             <Button
@@ -462,6 +523,7 @@ export function UserKeysCard() {
               onClick={() => {
                 setEditingItem(null);
                 setEditKey("");
+                setEditMaxSessions("4");
               }}
               disabled={editingItem ? pendingIds.has(editingItem.id) : false}
             >

@@ -4,7 +4,7 @@ import "./globals.css";
 import { TopNav } from "@/components/top-nav";
 
 export const metadata: Metadata = {
-  title: "把想法变成图像 - GPT Image 2",
+  title: "Turn ideas into images | gpt-image-2",
   description: "在同一个界面中完成灵感创作与 AI 绘图，让文字、艺术与视觉表达自然融合",
 };
 

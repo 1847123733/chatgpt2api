@@ -66,8 +66,11 @@ def create_router() -> APIRouter:
     router = APIRouter()
 
     @router.get("/v1/models")
-    async def list_models(authorization: str | None = Header(default=None)):
-        require_identity(authorization)
+    async def list_models(
+        authorization: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None, alias="x-session-id"),
+    ):
+        require_identity(authorization, x_session_id)
         try:
             return await run_in_threadpool(openai_v1_models.list_models)
         except Exception as exc:
@@ -78,8 +81,9 @@ def create_router() -> APIRouter:
             body: ImageGenerationRequest,
             request: Request,
             authorization: str | None = Header(default=None),
+            x_session_id: str | None = Header(default=None, alias="x-session-id"),
     ):
-        identity = require_identity(authorization)
+        identity = require_identity(authorization, x_session_id)
         payload = body.model_dump(mode="python")
         payload["base_url"] = resolve_image_base_url(request)
         call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图", request_text=body.prompt)
@@ -90,6 +94,7 @@ def create_router() -> APIRouter:
     async def edit_images(
             request: Request,
             authorization: str | None = Header(default=None),
+            x_session_id: str | None = Header(default=None, alias="x-session-id"),
             image: list[UploadFile] | None = File(default=None),
             image_list: list[UploadFile] | None = File(default=None, alias="image[]"),
             prompt: str = Form(...),
@@ -99,7 +104,7 @@ def create_router() -> APIRouter:
             response_format: str = Form(default="b64_json"),
             stream: bool | None = Form(default=None),
     ):
-        identity = require_identity(authorization)
+        identity = require_identity(authorization, x_session_id)
         call = LoggedCall(identity, "/v1/images/edits", model, "图生图", request_text=prompt)
         if n < 1 or n > 4:
             raise HTTPException(status_code=400, detail={"error": "n must be between 1 and 4"})
@@ -126,8 +131,12 @@ def create_router() -> APIRouter:
         return await call.run(openai_v1_image_edit.handle, payload)
 
     @router.post("/v1/chat/completions")
-    async def create_chat_completion(body: ChatCompletionRequest, authorization: str | None = Header(default=None)):
-        identity = require_identity(authorization)
+    async def create_chat_completion(
+        body: ChatCompletionRequest,
+        authorization: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None, alias="x-session-id"),
+    ):
+        identity = require_identity(authorization, x_session_id)
         payload = body.model_dump(mode="python")
         model = str(payload.get("model") or "auto")
         request_preview = request_text(payload.get("prompt"), payload.get("messages"))
@@ -136,8 +145,12 @@ def create_router() -> APIRouter:
         return await call.run(openai_v1_chat_complete.handle, payload)
 
     @router.post("/v1/responses")
-    async def create_response(body: ResponseCreateRequest, authorization: str | None = Header(default=None)):
-        identity = require_identity(authorization)
+    async def create_response(
+        body: ResponseCreateRequest,
+        authorization: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None, alias="x-session-id"),
+    ):
+        identity = require_identity(authorization, x_session_id)
         payload = body.model_dump(mode="python")
         model = str(payload.get("model") or "auto")
         request_preview = request_text(payload.get("input"), payload.get("instructions"))
@@ -149,10 +162,11 @@ def create_router() -> APIRouter:
     async def create_message(
             body: AnthropicMessageRequest,
             authorization: str | None = Header(default=None),
+            x_session_id: str | None = Header(default=None, alias="x-session-id"),
             x_api_key: str | None = Header(default=None, alias="x-api-key"),
             anthropic_version: str | None = Header(default=None, alias="anthropic-version"),
     ):
-        identity = require_identity(authorization or (f"Bearer {x_api_key}" if x_api_key else None))
+        identity = require_identity(authorization or (f"Bearer {x_api_key}" if x_api_key else None), x_session_id)
         payload = body.model_dump(mode="python")
         model = str(payload.get("model") or "auto")
         request_preview = request_text(payload.get("system"), payload.get("messages"), payload.get("tools"))

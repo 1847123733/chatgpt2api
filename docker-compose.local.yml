@@ -3,6 +3,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        NODE_IMAGE: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/node:22-alpine
+        PYTHON_IMAGE: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/python:3.13-slim
     image: chatgpt2api:local
     container_name: chatgpt2api-local
     ports:

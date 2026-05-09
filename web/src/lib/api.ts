@@ -211,6 +211,8 @@ export type LoginResponse = {
   role: AuthRole;
   subject_id: string;
   name: string;
+  session_id?: string | null;
+  max_sessions?: number | null;
   remaining_days?: number | null;
   expires_at?: string | null;
 };
@@ -224,6 +226,8 @@ export type UserKey = {
   last_used_at: string | null;
   expires_at?: string | null;
   remaining_days?: number | null;
+  max_sessions?: number | null;
+  active_sessions?: number | null;
 };
 
 export type RegisterConfig = {
@@ -264,13 +268,27 @@ export type RegisterConfig = {
   }>;
 };
 
-export async function login(authKey: string) {
+export async function login(authKey: string, sessionId?: string | null) {
   const normalizedAuthKey = String(authKey || "").trim();
   return httpRequest<LoginResponse>("/auth/login", {
     method: "POST",
     body: {},
     headers: {
       Authorization: `Bearer ${normalizedAuthKey}`,
+      ...(sessionId ? { "x-session-id": sessionId } : {}),
+    },
+    redirectOnUnauthorized: false,
+  });
+}
+
+export async function logout(authKey: string, sessionId?: string | null) {
+  const normalizedAuthKey = String(authKey || "").trim();
+  return httpRequest<{ ok: boolean }>("/auth/logout", {
+    method: "POST",
+    body: {},
+    headers: {
+      Authorization: `Bearer ${normalizedAuthKey}`,
+      ...(sessionId ? { "x-session-id": sessionId } : {}),
     },
     redirectOnUnauthorized: false,
   });
@@ -545,20 +563,26 @@ export async function fetchUserKeys() {
   return httpRequest<{ items: UserKey[] }>("/api/auth/users");
 }
 
-export async function createUserKey(name: string, validDays = 30) {
+export async function createUserKey(name: string, validDays = 30, maxSessions = 4) {
   return httpRequest<{ item: UserKey; key: string; items: UserKey[] }>("/api/auth/users", {
     method: "POST",
-    body: { name, valid_days: validDays },
+    body: { name, valid_days: validDays, max_sessions: maxSessions },
   });
 }
 
 export async function updateUserKey(
   keyId: string,
-  updates: { enabled?: boolean; name?: string; key?: string; valid_days?: number; renew_days?: number },
+  updates: { enabled?: boolean; name?: string; key?: string; valid_days?: number; renew_days?: number; max_sessions?: number },
 ) {
   return httpRequest<{ item: UserKey; items: UserKey[] }>(`/api/auth/users/${keyId}`, {
     method: "POST",
     body: updates,
+  });
+}
+
+export async function clearUserKeySessions(keyId: string) {
+  return httpRequest<{ item: UserKey; items: UserKey[] }>(`/api/auth/users/${keyId}/clear-sessions`, {
+    method: "POST",
   });
 }
 
