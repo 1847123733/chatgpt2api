@@ -107,6 +107,100 @@ class LogService:
         self.path.write_text(content, encoding="utf-8")
         return {"removed": removed}
 
+    def user_usage(self, user_keys: list[dict[str, Any]], *, recent_limit: int = 8) -> dict[str, Any]:
+        key_names = {
+            str(item.get("id") or ""): str(item.get("name") or "")
+            for item in user_keys
+            if str(item.get("id") or "")
+        }
+        stats = {
+            key_id: {
+                "key_id": key_id,
+                "key_name": key_name,
+                "total_calls": 0,
+                "success_calls": 0,
+                "failed_calls": 0,
+                "image_count": 0,
+                "total_duration_ms": 0,
+                "average_duration_ms": 0,
+                "success_rate": 0,
+                "last_called_at": None,
+                "recent_images": [],
+                "recent_logs": [],
+            }
+            for key_id, key_name in key_names.items()
+        }
+        summary = {
+            "total_calls": 0,
+            "success_calls": 0,
+            "failed_calls": 0,
+            "image_count": 0,
+            "active_users": 0,
+        }
+        if not self.path.exists():
+            return {"summary": summary, "items": list(stats.values())}
+
+        lines = self.path.read_text(encoding="utf-8").splitlines()
+        for line_number in range(len(lines) - 1, -1, -1):
+            item = self._parse_line(lines[line_number], line_number)
+            if item is None or item.get("type") != LOG_TYPE_CALL:
+                continue
+            detail = item.get("detail")
+            if not isinstance(detail, dict):
+                continue
+            key_id = str(detail.get("key_id") or "").strip()
+            if key_id not in stats:
+                continue
+
+            row = stats[key_id]
+            urls = detail.get("urls")
+            image_urls = [url for url in urls if isinstance(url, str) and url] if isinstance(urls, list) else []
+            status = str(detail.get("status") or "")
+            duration_ms = detail.get("duration_ms")
+            duration = int(duration_ms) if isinstance(duration_ms, (int, float)) else 0
+            log_time = str(item.get("time") or detail.get("ended_at") or "")
+
+            row["total_calls"] = int(row["total_calls"]) + 1
+            row["image_count"] = int(row["image_count"]) + len(image_urls)
+            row["total_duration_ms"] = int(row["total_duration_ms"]) + max(0, duration)
+            if status == "failed":
+                row["failed_calls"] = int(row["failed_calls"]) + 1
+            else:
+                row["success_calls"] = int(row["success_calls"]) + 1
+            if row["last_called_at"] is None:
+                row["last_called_at"] = log_time or None
+            if image_urls and len(row["recent_images"]) < recent_limit:
+                remaining = recent_limit - len(row["recent_images"])
+                row["recent_images"].extend(image_urls[:remaining])
+            if len(row["recent_logs"]) < recent_limit:
+                row["recent_logs"].append({
+                    "id": item.get("id"),
+                    "time": log_time,
+                    "summary": item.get("summary") or "",
+                    "endpoint": detail.get("endpoint") or "",
+                    "model": detail.get("model") or "",
+                    "status": status or "success",
+                    "duration_ms": duration,
+                    "image_count": len(image_urls),
+                    "error": detail.get("error") or "",
+                })
+
+        items = list(stats.values())
+        for row in items:
+            total = int(row["total_calls"])
+            success = int(row["success_calls"])
+            duration_total = int(row.pop("total_duration_ms"))
+            row["average_duration_ms"] = int(duration_total / total) if total else 0
+            row["success_rate"] = round(success / total * 100, 1) if total else 0
+            summary["total_calls"] += total
+            summary["success_calls"] += success
+            summary["failed_calls"] += int(row["failed_calls"])
+            summary["image_count"] += int(row["image_count"])
+            if total:
+                summary["active_users"] += 1
+        items.sort(key=lambda row: str(row.get("last_called_at") or ""), reverse=True)
+        return {"summary": summary, "items": items}
+
 
 log_service = LogService(DATA_DIR / "logs.jsonl")
 

@@ -230,6 +230,40 @@ export type UserKey = {
   active_sessions?: number | null;
 };
 
+export type UserKeyUsageLog = {
+  id: string;
+  time: string;
+  summary: string;
+  endpoint: string;
+  model: string;
+  status: "success" | "failed" | string;
+  duration_ms: number;
+  image_count: number;
+  error?: string;
+};
+
+export type UserKeyUsageItem = {
+  key_id: string;
+  key_name: string;
+  total_calls: number;
+  success_calls: number;
+  failed_calls: number;
+  image_count: number;
+  average_duration_ms: number;
+  success_rate: number;
+  last_called_at?: string | null;
+  recent_images: string[];
+  recent_logs: UserKeyUsageLog[];
+};
+
+export type UserKeyUsageSummary = {
+  total_calls: number;
+  success_calls: number;
+  failed_calls: number;
+  image_count: number;
+  active_users: number;
+};
+
 export type RegisterConfig = {
   enabled: boolean;
   mail: {
@@ -561,6 +595,10 @@ export async function deleteSystemLogs(ids: string[]) {
 
 export async function fetchUserKeys() {
   return httpRequest<{ items: UserKey[] }>("/api/auth/users");
+}
+
+export async function fetchUserKeyUsage() {
+  return httpRequest<{ summary: UserKeyUsageSummary; items: UserKeyUsageItem[] }>("/api/auth/users/usage");
 }
 
 export async function createUserKey(name: string, validDays = 30, maxSessions = 4) {

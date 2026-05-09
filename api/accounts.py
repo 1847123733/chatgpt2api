@@ -5,6 +5,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from services.auth_service import auth_service
+from services.log_service import log_service
 
 from api.support import (
     require_admin,
@@ -103,6 +104,11 @@ def create_router() -> APIRouter:
     async def list_user_keys(authorization: str | None = Header(default=None)):
         require_admin(authorization)
         return {"items": auth_service.list_keys(role="user")}
+
+    @router.get("/api/auth/users/usage")
+    async def get_user_key_usage(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        return log_service.user_usage(auth_service.list_keys(role="user"))
 
     @router.post("/api/auth/users")
     async def create_user_key(body: UserKeyCreateRequest, authorization: str | None = Header(default=None)):

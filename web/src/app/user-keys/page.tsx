@@ -5,6 +5,7 @@ import { LoaderCircle } from "lucide-react";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 
 import { UserKeysCard } from "./components/user-keys-card";
+import { UserKeyUsageCard } from "./components/user-key-usage-card";
 
 function UserKeysPageContent() {
   return (
@@ -16,8 +17,9 @@ function UserKeysPageContent() {
           <p className="text-sm text-stone-500">集中管理普通用户访问密钥，支持创建、禁用、续期和删除。</p>
         </div>
       </section>
-      <section>
+      <section className="space-y-5">
         <UserKeysCard />
+        <UserKeyUsageCard />
       </section>
     </>
   );
