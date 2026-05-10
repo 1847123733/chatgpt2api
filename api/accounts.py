@@ -5,6 +5,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from services.auth_service import auth_service
+from services.config import config
 from services.log_service import log_service
 
 from api.support import (
@@ -29,6 +30,33 @@ class UserKeyCreateRequest(BaseModel):
     name: str = ""
     valid_days: int = 30
     max_sessions: int = 4
+
+
+class ResellerKeyCreateRequest(BaseModel):
+    name: str = ""
+    valid_days: int = 365
+    max_sessions: int = 4
+    max_trial_keys: int = 20
+    cost_per_user: float = 0.0
+
+
+class ResellerKeyUpdateRequest(BaseModel):
+    name: str | None = None
+    enabled: bool | None = None
+    key: str | None = None
+    valid_days: int | None = None
+    renew_days: int | None = None
+    max_sessions: int | None = None
+    max_trial_keys: int | None = None
+    cost_per_user: float | None = None
+
+
+class SettlementCreateRequest(BaseModel):
+    period: str = ""
+    customer_count: int = 0
+    amount: float = 0.0
+    status: str = "unpaid"
+    notes: str = ""
 
 
 class UserKeyUpdateRequest(BaseModel):
@@ -167,6 +195,138 @@ def create_router() -> APIRouter:
         if not auth_service.delete_key(key_id, role="user"):
             raise HTTPException(status_code=404, detail={"error": "这条用户密钥不存在，可能已经被删除"})
         return {"items": auth_service.list_keys(role="user")}
+
+    # ─── Reseller management (admin only) ───
+
+    @router.get("/api/auth/resellers")
+    async def list_resellers(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        items = auth_service.list_keys(role="reseller")
+        # enrich with customer counts
+        for item in items:
+            stats = auth_service.count_customers(str(item.get("id")))
+            item["total_customers"] = stats["total"]
+            item["active_customers"] = stats["active"]
+            item["trial_customers"] = stats["trial"]
+            item["paid_customers"] = stats["paid"]
+        return {"items": items}
+
+    @router.post("/api/auth/resellers")
+    async def create_reseller(body: ResellerKeyCreateRequest, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        try:
+            item, raw_key = auth_service.create_key(
+                role="reseller",
+                name=body.name,
+                valid_days=body.valid_days,
+                max_sessions=body.max_sessions,
+                max_trial_keys=body.max_trial_keys,
+                cost_per_user=body.cost_per_user,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        return {"item": item, "key": raw_key, "items": auth_service.list_keys(role="reseller")}
+
+    @router.post("/api/auth/resellers/{key_id}")
+    async def update_reseller(key_id: str, body: ResellerKeyUpdateRequest, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        updates = {
+            key: value
+            for key, value in {
+                "name": body.name,
+                "enabled": body.enabled,
+                "key": body.key,
+                "valid_days": body.valid_days,
+                "renew_days": body.renew_days,
+                "max_sessions": body.max_sessions,
+                "max_trial_keys": body.max_trial_keys,
+                "cost_per_user": body.cost_per_user,
+            }.items()
+            if value is not None
+        }
+        if not updates:
+            raise HTTPException(status_code=400, detail={"error": "还没有检测到改动，请修改后再保存"})
+        try:
+            item = auth_service.update_key(key_id, updates, role="reseller")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        if item is None:
+            raise HTTPException(status_code=404, detail={"error": "这条代理商密钥不存在，可能已经被删除"})
+        return {"item": item, "items": auth_service.list_keys(role="reseller")}
+
+    @router.delete("/api/auth/resellers/{key_id}")
+    async def delete_reseller(key_id: str, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        if not auth_service.delete_key(key_id, role="reseller"):
+            raise HTTPException(status_code=404, detail={"error": "这条代理商密钥不存在，可能已经被删除"})
+        return {"items": auth_service.list_keys(role="reseller")}
+
+    @router.post("/api/auth/resellers/{key_id}/clear-sessions")
+    async def clear_reseller_sessions(key_id: str, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        result = auth_service.clear_key_sessions(key_id, role="reseller")
+        if result is None:
+            raise HTTPException(status_code=404, detail={"error": "代理商不存在"})
+        return {"item": result}
+
+    @router.get("/api/auth/resellers/usage")
+    async def get_reseller_usage(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        resellers = auth_service.list_keys(role="reseller")
+        result = []
+        for r in resellers:
+            rid = str(r.get("id"))
+            customers = auth_service.list_keys(role="user", owner_id=rid)
+            usage = log_service.user_usage(customers)
+            result.append({
+                "reseller": r,
+                "customer_count": len(customers),
+                "usage": usage,
+            })
+        return {"items": result}
+
+    @router.post("/api/auth/resellers/{key_id}/settlement")
+    async def create_settlement(key_id: str, body: SettlementCreateRequest, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        # verify reseller exists
+        resellers = auth_service.list_keys(role="reseller")
+        if not any(r.get("id") == key_id for r in resellers):
+            raise HTTPException(status_code=404, detail={"error": "代理商不存在"})
+        import uuid
+        from services.auth_service import _now_iso
+        try:
+            storage = config.get_storage_backend()
+            settlements = storage.load_settlements()
+            if not isinstance(settlements, list):
+                settlements = []
+            settlement = {
+                "id": uuid.uuid4().hex[:12],
+                "reseller_id": key_id,
+                "period": body.period,
+                "customer_count": body.customer_count,
+                "amount": body.amount,
+                "status": body.status,
+                "settled_at": _now_iso(),
+                "notes": body.notes,
+            }
+            settlements.append(settlement)
+            storage.save_settlements(settlements)
+            return {"item": settlement, "items": [s for s in settlements if s.get("reseller_id") == key_id]}
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail={"error": f"保存结算记录失败: {exc}"}) from exc
+
+    @router.get("/api/auth/resellers/{key_id}/settlements")
+    async def list_settlements(key_id: str, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        try:
+            storage = config.get_storage_backend()
+            settlements = storage.load_settlements()
+            if not isinstance(settlements, list):
+                settlements = []
+            items = [s for s in settlements if s.get("reseller_id") == key_id]
+            return {"items": items}
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail={"error": f"加载结算记录失败: {exc}"}) from exc
 
     @router.get("/api/accounts")
     async def get_accounts(authorization: str | None = Header(default=None)):

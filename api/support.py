@@ -55,6 +55,13 @@ def require_admin(authorization: str | None, session_id: str | None = None) -> d
     return identity
 
 
+def require_reseller(authorization: str | None, session_id: str | None = None) -> dict[str, object]:
+    identity = require_identity(authorization, session_id=session_id)
+    if identity.get("role") not in ("admin", "reseller"):
+        raise HTTPException(status_code=403, detail={"error": "需要代理商或管理员权限"})
+    return identity
+
+
 def resolve_image_base_url(request: Request) -> str:
     return config.base_url or f"{request.url.scheme}://{request.headers.get('host', request.url.netloc)}"
 

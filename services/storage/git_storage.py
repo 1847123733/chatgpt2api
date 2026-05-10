@@ -29,6 +29,7 @@ class GitStorageBackend(StorageBackend):
         self.branch = branch
         self.file_path = file_path
         self.auth_keys_file_path = auth_keys_file_path
+        self.settlements_file_path = "settlements.json"
         
         # 本地缓存目录
         if local_cache_dir is None:
@@ -115,6 +116,19 @@ class GitStorageBackend(StorageBackend):
             self._save_json_file(self.auth_keys_file_path, {"items": auth_keys}, "Update auth keys data")
         except Exception as e:
             print(f"[git-storage] save failed: {e}")
+            raise e
+
+    def load_settlements(self) -> list[dict[str, Any]]:
+        try:
+            return self._load_json_file(self.settlements_file_path)
+        except Exception:
+            return []
+
+    def save_settlements(self, settlements: list[dict[str, Any]]) -> None:
+        try:
+            self._save_json_file(self.settlements_file_path, settlements, "Update settlements data")
+        except Exception as e:
+            print(f"[git-storage] save settlements failed: {e}")
             raise e
 
     def _load_json_file(self, file_path: str) -> list[dict[str, Any]]:

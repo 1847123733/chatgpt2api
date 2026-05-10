@@ -24,8 +24,11 @@ export async function getValidatedAuthSession(): Promise<StoredAuthSession | nul
     return nextSession;
   } catch (error) {
     const code = typeof error === "object" && error && "code" in error ? String((error as { code?: string }).code || "") : "";
-    if (code === "session_invalid" && storedSession.role === "user") {
+    const status = typeof error === "object" && error && "status" in error ? (error as { status?: number }).status : undefined;
+    console.warn("[auth-session] 验证失败:", { code, status, role: storedSession.role, error });
+    if (code === "session_invalid" && (storedSession.role === "user" || storedSession.role === "reseller")) {
       try {
+        console.warn("[auth-session] 尝试重新登录 (无session_id)...");
         const data = await login(storedSession.key);
         const nextSession: StoredAuthSession = {
           key: storedSession.key,
@@ -38,7 +41,8 @@ export async function getValidatedAuthSession(): Promise<StoredAuthSession | nul
         };
         await setStoredAuthSession(nextSession);
         return nextSession;
-      } catch {
+      } catch (retryError) {
+        console.warn("[auth-session] 重新登录也失败:", retryError);
         // Fall through to clearing the stale session below.
       }
     }

@@ -257,6 +257,36 @@ class ConfigStore:
         return removed
 
     @property
+    def reseller_tiers(self) -> list[dict[str, object]]:
+        raw = self.data.get("reseller_tiers")
+        if not isinstance(raw, list):
+            return [
+                {"name": "100", "limit": 100, "label": "100次/月"},
+                {"name": "200", "limit": 200, "label": "200次/月"},
+                {"name": "300", "limit": 300, "label": "300次/月"},
+                {"name": "unlimited", "limit": 999999, "label": "不限次"},
+            ]
+        result: list[dict[str, object]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            try:
+                limit = max(1, int(item.get("limit", 0)))
+            except (TypeError, ValueError):
+                continue
+            label = str(item.get("label") or name).strip()
+            result.append({"name": name, "limit": limit, "label": label})
+        return result if result else [
+            {"name": "100", "limit": 100, "label": "100次/月"},
+            {"name": "200", "limit": 200, "label": "200次/月"},
+            {"name": "300", "limit": 300, "label": "300次/月"},
+            {"name": "unlimited", "limit": 999999, "label": "不限次"},
+        ]
+
+    @property
     def base_url(self) -> str:
         return str(
             os.getenv("CHATGPT2API_BASE_URL")
@@ -285,6 +315,7 @@ class ConfigStore:
         data["ai_review"] = self.ai_review
         data["global_system_prompt"] = self.global_system_prompt
         data["backup"] = self.get_backup_settings()
+        data["reseller_tiers"] = self.reseller_tiers
         data.pop("auth-key", None)
         return data
 

@@ -16,7 +16,7 @@ type ErrorPayload = {
 };
 
 type LoginResponse = {
-    role: "admin" | "user";
+    role: "admin" | "reseller" | "user";
     subject_id: string;
     name: string;
     session_id?: string | null;
@@ -61,7 +61,7 @@ const sessionRecoveryRequest = axios.create({
 
 async function recoverUserSession() {
     const storedSession = await getStoredAuthSession();
-    if (!storedSession || storedSession.role !== "user") {
+    if (!storedSession || (storedSession.role !== "user" && storedSession.role !== "reseller")) {
         return null;
     }
 
@@ -99,6 +99,9 @@ request.interceptors.request.use(async (config) => {
     if (storedSession?.sessionId && !headers["x-session-id"]) {
         headers["x-session-id"] = storedSession.sessionId;
     }
+    if (!authKey && nextConfig.url !== "/auth/login") {
+        console.warn("[request] 无authKey:", nextConfig.url);
+    }
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-expect-error
     nextConfig.headers = headers;
@@ -114,7 +117,9 @@ request.interceptors.response.use(
         const requestConfig = error.config as RequestConfig | undefined;
         if (status === 401 && errorCode === "session_invalid" && requestConfig && !requestConfig._sessionRecoveryRetried) {
             try {
+                console.warn("[request] session_invalid，尝试恢复...");
                 const recoveredSession = await recoverUserSession();
+                console.warn("[request] 恢复结果:", recoveredSession ? "成功" : "失败");
                 if (recoveredSession) {
                     requestConfig._sessionRecoveryRetried = true;
                     const headers = {...(requestConfig.headers || {})} as Record<string, string>;
@@ -134,9 +139,13 @@ request.interceptors.response.use(
 
         const shouldRedirect = requestConfig?.redirectOnUnauthorized !== false;
         const shouldClearAuth = errorCode !== "session_invalid" || !requestConfig || Boolean(requestConfig._sessionRecoveryRetried);
+        if (status === 401) {
+            console.warn("[request] 401:", { url: requestConfig?.url, errorCode, shouldRedirect, shouldClearAuth });
+        }
         if (status === 401 && shouldRedirect && shouldClearAuth && typeof window !== "undefined") {
             // Avoid redirect loop — only redirect if not already on /login
             if (!window.location.pathname.startsWith("/login")) {
+                console.warn("[request] 清除session并跳转到登录页");
                 await clearStoredAuthSession();
                 window.location.replace("/login");
                 // Return a never-resolving promise to prevent further error handling

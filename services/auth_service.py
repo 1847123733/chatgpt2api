@@ -11,7 +11,7 @@ from typing import Literal
 from services.config import config
 from services.storage.base import StorageBackend
 
-AuthRole = Literal["admin", "user"]
+AuthRole = Literal["admin", "reseller", "user"]
 
 DEFAULT_USER_KEY_VALID_DAYS = 30
 DEFAULT_USER_MAX_SESSIONS = 4
@@ -59,13 +59,18 @@ class AuthService:
 
     @staticmethod
     def _default_name(role: object) -> str:
-        return "管理员密钥" if str(role or "").strip().lower() == "admin" else "普通用户"
+        role_str = str(role or "").strip().lower()
+        if role_str == "admin":
+            return "管理员密钥"
+        if role_str == "reseller":
+            return "代理商"
+        return "普通用户"
 
     def _normalize_item(self, raw: object) -> dict[str, object] | None:
         if not isinstance(raw, dict):
             return None
         role = self._clean(raw.get("role")).lower()
-        if role not in {"admin", "user"}:
+        if role not in {"admin", "reseller", "user"}:
             return None
         key_hash = self._clean(raw.get("key_hash"))
         if not key_hash:
@@ -84,7 +89,8 @@ class AuthService:
             normalized = self._normalize_session(session)
             if normalized is not None:
                 normalized_sessions.append(normalized)
-        return {
+        has_sessions = role in ("user", "reseller")
+        result: dict[str, object] = {
             "id": item_id,
             "name": name,
             "role": role,
@@ -94,9 +100,32 @@ class AuthService:
             "last_used_at": last_used_at,
             "expires_at": expires_at,
             "sessions_revoked_at": self._clean(raw.get("sessions_revoked_at")) or None,
-            "max_sessions": max(1, min(100, max_sessions)) if role == "user" else 1,
-            "sessions": normalized_sessions if role == "user" else [],
+            "max_sessions": max(1, min(100, max_sessions)) if has_sessions else 1,
+            "sessions": normalized_sessions if has_sessions else [],
         }
+        if role == "reseller":
+            try:
+                result["max_trial_keys"] = max(0, min(9999, int(raw.get("max_trial_keys", 20))))
+            except (TypeError, ValueError):
+                result["max_trial_keys"] = 20
+            try:
+                result["cost_per_user"] = max(0.0, float(raw.get("cost_per_user", 0.0)))
+            except (TypeError, ValueError):
+                result["cost_per_user"] = 0.0
+        if role == "user":
+            result["owner_id"] = self._clean(raw.get("owner_id")) or ""
+            result["is_trial"] = bool(raw.get("is_trial", False))
+            result["tier"] = self._clean(raw.get("tier")) or ""
+            try:
+                result["monthly_limit"] = max(0, int(raw.get("monthly_limit", 0)))
+            except (TypeError, ValueError):
+                result["monthly_limit"] = 0
+            try:
+                result["monthly_usage"] = max(0, int(raw.get("monthly_usage", 0)))
+            except (TypeError, ValueError):
+                result["monthly_usage"] = 0
+            result["monthly_reset_at"] = self._clean(raw.get("monthly_reset_at")) or None
+        return result
 
     def _normalize_session(self, raw: object) -> dict[str, object] | None:
         if not isinstance(raw, dict):
@@ -145,7 +174,7 @@ class AuthService:
         return ((now or datetime.now(timezone.utc)) + timedelta(days=USER_SESSION_IDLE_DAYS)).isoformat()
 
     def _prune_sessions_locked(self, item: dict[str, object], *, now: datetime | None = None) -> tuple[dict[str, object], bool]:
-        if item.get("role") != "user":
+        if item.get("role") not in ("user", "reseller"):
             return item, False
         snapshot = now or datetime.now(timezone.utc)
         current_sessions = item.get("sessions")
@@ -171,23 +200,38 @@ class AuthService:
         return next_item, True
 
     @staticmethod
-    def _public_item(item: dict[str, object], *, remaining_days: int | None = None) -> dict[str, object]:
+    def _public_item(item: dict[str, object], *, remaining_days: int | None = None, extra: dict[str, object] | None = None) -> dict[str, object]:
         sessions = item.get("sessions")
         active_session_count = len(sessions) if isinstance(sessions, list) else 0
-        return {
+        role = item.get("role")
+        has_sessions = role in ("user", "reseller")
+        result: dict[str, object] = {
             "id": item.get("id"),
             "name": item.get("name"),
-            "role": item.get("role"),
+            "role": role,
             "enabled": bool(item.get("enabled", True)),
             "created_at": item.get("created_at"),
             "last_used_at": item.get("last_used_at"),
             "expires_at": item.get("expires_at"),
             "remaining_days": remaining_days,
-            "max_sessions": item.get("max_sessions") if item.get("role") == "user" else None,
-            "active_sessions": active_session_count if item.get("role") == "user" else None,
+            "max_sessions": item.get("max_sessions") if has_sessions else None,
+            "active_sessions": active_session_count if has_sessions else None,
         }
+        if role == "reseller":
+            result["max_trial_keys"] = item.get("max_trial_keys", 20)
+            result["cost_per_user"] = item.get("cost_per_user", 0.0)
+        if role == "user":
+            result["owner_id"] = item.get("owner_id", "")
+            result["is_trial"] = item.get("is_trial", False)
+            result["tier"] = item.get("tier", "")
+            result["monthly_limit"] = item.get("monthly_limit", 0)
+            result["monthly_usage"] = item.get("monthly_usage", 0)
+            result["monthly_reset_at"] = item.get("monthly_reset_at")
+        if extra:
+            result.update(extra)
+        return result
 
-    def list_keys(self, role: AuthRole | None = None) -> list[dict[str, object]]:
+    def list_keys(self, role: AuthRole | None = None, *, owner_id: str | None = None) -> list[dict[str, object]]:
         with self._lock:
             self._reload_locked()
             now = datetime.now(timezone.utc)
@@ -215,6 +259,8 @@ class AuthService:
                 except Exception:
                     pass
             items = [item for item in self._items if role is None or item.get("role") == role]
+            if owner_id is not None:
+                items = [item for item in items if item.get("owner_id") == owner_id]
             return [self._public_item(item, remaining_days=self._compute_remaining_days(item, now=now)) for item in items]
 
     def _has_key_hash_locked(self, key_hash: str, *, exclude_id: str = "") -> bool:
@@ -279,12 +325,19 @@ class AuthService:
         name: str = "",
         valid_days: int | None = None,
         max_sessions: int | None = None,
+        max_trial_keys: int | None = None,
+        cost_per_user: float | None = None,
+        owner_id: str | None = None,
+        is_trial: bool | None = None,
+        tier: str | None = None,
+        monthly_limit: int | None = None,
     ) -> tuple[dict[str, object], str]:
         with self._lock:
             self._reload_locked()
             normalized_name = self._build_name_locked(name, role=role)
             normalized_days = None
-            if role == "user":
+            has_sessions = role in ("user", "reseller")
+            if has_sessions:
                 try:
                     candidate_days = int(valid_days) if valid_days is not None else DEFAULT_USER_KEY_VALID_DAYS
                 except (TypeError, ValueError):
@@ -297,6 +350,11 @@ class AuthService:
                 normalized_max_sessions = max(1, min(100, candidate_sessions))
             else:
                 normalized_max_sessions = 1
+            # trial account overrides
+            trial = bool(is_trial) if is_trial is not None else False
+            if role == "user" and trial:
+                normalized_days = 1
+                monthly_limit = 10
             while True:
                 raw_key = f"sk-{secrets.token_urlsafe(24)}"
                 try:
@@ -305,9 +363,9 @@ class AuthService:
                 except ValueError:
                     continue
             expires_at = None
-            if role == "user" and normalized_days is not None:
+            if has_sessions and normalized_days is not None:
                 expires_at = (datetime.now(timezone.utc) + timedelta(days=normalized_days)).isoformat()
-            item = {
+            item: dict[str, object] = {
                 "id": uuid.uuid4().hex[:12],
                 "name": normalized_name,
                 "role": role,
@@ -320,6 +378,25 @@ class AuthService:
                 "max_sessions": normalized_max_sessions,
                 "sessions": [],
             }
+            if role == "reseller":
+                try:
+                    item["max_trial_keys"] = max(0, min(9999, int(max_trial_keys) if max_trial_keys is not None else 20))
+                except (TypeError, ValueError):
+                    item["max_trial_keys"] = 20
+                try:
+                    item["cost_per_user"] = max(0.0, float(cost_per_user) if cost_per_user is not None else 0.0)
+                except (TypeError, ValueError):
+                    item["cost_per_user"] = 0.0
+            if role == "user":
+                item["owner_id"] = self._clean(owner_id) or ""
+                item["is_trial"] = trial
+                item["tier"] = self._clean(tier) or ""
+                try:
+                    item["monthly_limit"] = max(0, int(monthly_limit) if monthly_limit is not None else 0)
+                except (TypeError, ValueError):
+                    item["monthly_limit"] = 0
+                item["monthly_usage"] = 0
+                item["monthly_reset_at"] = None
             self._items.append(item)
             self._save()
             return self._public_item(item, remaining_days=self._compute_remaining_days(item)), raw_key
@@ -342,11 +419,11 @@ class AuthService:
                 if role is not None and item.get("role") != role:
                     return None
                 next_item = dict(item)
-                next_role = "admin" if str(next_item.get("role") or "").strip().lower() == "admin" else "user"
+                current_role = str(next_item.get("role") or "").strip().lower()
                 if "name" in updates and updates.get("name") is not None:
                     next_item["name"] = self._build_name_locked(
                         str(updates.get("name") or ""),
-                        role=next_role,
+                        role=current_role,
                         exclude_id=normalized_id,
                     )
                 if "enabled" in updates and updates.get("enabled") is not None:
@@ -372,12 +449,44 @@ class AuthService:
                     base = current_expiry if current_expiry and current_expiry > now else now
                     next_item["expires_at"] = (base + timedelta(days=days)).isoformat()
                     next_item["enabled"] = True
-                if next_role == "user" and "max_sessions" in updates and updates.get("max_sessions") is not None:
+                if current_role in ("user", "reseller") and "max_sessions" in updates and updates.get("max_sessions") is not None:
                     try:
                         max_sessions = int(updates.get("max_sessions"))
                     except (TypeError, ValueError):
                         raise ValueError("同时在线数格式不正确") from None
                     next_item["max_sessions"] = max(1, min(100, max_sessions))
+                # reseller fields
+                if current_role == "reseller":
+                    if "max_trial_keys" in updates and updates.get("max_trial_keys") is not None:
+                        try:
+                            next_item["max_trial_keys"] = max(0, min(9999, int(updates.get("max_trial_keys"))))
+                        except (TypeError, ValueError):
+                            raise ValueError("试用名额格式不正确") from None
+                    if "cost_per_user" in updates and updates.get("cost_per_user") is not None:
+                        try:
+                            next_item["cost_per_user"] = max(0.0, float(updates.get("cost_per_user")))
+                        except (TypeError, ValueError):
+                            raise ValueError("成本价格式不正确") from None
+                # user fields
+                if current_role == "user":
+                    if "is_trial" in updates and updates.get("is_trial") is not None:
+                        next_item["is_trial"] = bool(updates.get("is_trial"))
+                    if "tier" in updates and updates.get("tier") is not None:
+                        next_item["tier"] = self._clean(updates.get("tier"))
+                    if "monthly_limit" in updates and updates.get("monthly_limit") is not None:
+                        try:
+                            next_item["monthly_limit"] = max(0, int(updates.get("monthly_limit")))
+                        except (TypeError, ValueError):
+                            raise ValueError("月限额格式不正确") from None
+                    if "monthly_usage" in updates and updates.get("monthly_usage") is not None:
+                        try:
+                            next_item["monthly_usage"] = max(0, int(updates.get("monthly_usage")))
+                        except (TypeError, ValueError):
+                            pass
+                    if "monthly_reset_at" in updates:
+                        next_item["monthly_reset_at"] = self._clean(updates.get("monthly_reset_at")) or None
+                    if "owner_id" in updates and updates.get("owner_id") is not None:
+                        next_item["owner_id"] = self._clean(updates.get("owner_id"))
                 next_item, _ = self._prune_sessions_locked(next_item)
                 self._items[index] = next_item
                 self._save()
@@ -402,12 +511,16 @@ class AuthService:
             return True
 
     def authenticate(self, raw_key: str, *, session_id: str | None = None, allow_create_session: bool = False) -> dict[str, object] | None:
+        import sys
         candidate = self._clean(raw_key)
         if not candidate:
+            print(f"[auth] authenticate: empty key", file=sys.stderr)
             return None
         candidate_hash = _hash_key(candidate)
+        print(f"[auth] authenticate: key={candidate[:10]}... session_id={session_id} allow_create={allow_create_session} items={len(self._items)}", file=sys.stderr)
         with self._lock:
             for index, item in enumerate(self._items):
+                print(f"[auth]   item[{index}]: role={item.get('role')} id={item.get('id')} hash_match={hmac.compare_digest(self._clean(item.get('key_hash')), candidate_hash)}", file=sys.stderr)
                 item, sessions_changed = self._prune_sessions_locked(item)
                 if sessions_changed:
                     self._items[index] = item
@@ -430,7 +543,7 @@ class AuthService:
                 next_item = dict(item)
                 next_item["last_used_at"] = now.isoformat()
                 must_save = sessions_changed
-                if next_item.get("role") == "user":
+                if next_item.get("role") in ("user", "reseller"):
                     active_sessions = list(next_item.get("sessions") if isinstance(next_item.get("sessions"), list) else [])
                     normalized_session_id = self._clean(session_id)
                     matched = False
@@ -475,7 +588,7 @@ class AuthService:
                     except Exception:
                         pass
                 public_item = self._public_item(next_item, remaining_days=self._compute_remaining_days(next_item, now=now))
-                if next_item.get("role") == "user":
+                if next_item.get("role") in ("user", "reseller"):
                     current_sessions = next_item.get("sessions")
                     if isinstance(current_sessions, list) and current_sessions:
                         public_item["session_id"] = str(current_sessions[-1].get("id")) if not session_id else self._clean(session_id)
@@ -494,7 +607,7 @@ class AuthService:
                 stored_hash = self._clean(item.get("key_hash"))
                 if not stored_hash or not hmac.compare_digest(stored_hash, candidate_hash):
                     continue
-                if item.get("role") != "user":
+                if item.get("role") not in ("user", "reseller"):
                     return False
                 sessions = item.get("sessions") if isinstance(item.get("sessions"), list) else []
                 next_sessions = [
@@ -530,6 +643,92 @@ class AuthService:
                 self._save()
                 return self._public_item(next_item, remaining_days=self._compute_remaining_days(next_item))
         return None
+
+    def check_and_increment_monthly_usage(self, key_id: str, count: int = 1) -> tuple[bool, dict[str, object] | None]:
+        normalized_id = self._clean(key_id)
+        if not normalized_id:
+            return False, None
+        with self._lock:
+            self._reload_locked()
+            for index, item in enumerate(self._items):
+                if item.get("id") != normalized_id:
+                    continue
+                if item.get("role") != "user":
+                    return True, self._public_item(item)
+                next_item = dict(item)
+                now = datetime.now(timezone.utc)
+                # monthly reset check
+                reset_at = _parse_iso(next_item.get("monthly_reset_at"))
+                if reset_at is None or reset_at.year != now.year or reset_at.month != now.month:
+                    next_item["monthly_usage"] = 0
+                    next_item["monthly_reset_at"] = datetime(now.year, now.month, 1, tzinfo=timezone.utc).isoformat()
+                monthly_limit = int(next_item.get("monthly_limit") or 0)
+                monthly_usage = int(next_item.get("monthly_usage") or 0)
+                if monthly_limit > 0 and monthly_usage >= monthly_limit:
+                    self._items[index] = next_item
+                    self._save()
+                    return False, self._public_item(next_item, remaining_days=self._compute_remaining_days(next_item, now=now))
+                next_item["monthly_usage"] = monthly_usage + count
+                self._items[index] = next_item
+                self._save()
+                return True, self._public_item(next_item, remaining_days=self._compute_remaining_days(next_item, now=now))
+        return False, None
+
+    def get_user_profile(self, key_id: str) -> dict[str, object] | None:
+        normalized_id = self._clean(key_id)
+        if not normalized_id:
+            return None
+        with self._lock:
+            self._reload_locked()
+            for item in self._items:
+                if item.get("id") != normalized_id:
+                    continue
+                now = datetime.now(timezone.utc)
+                public = self._public_item(item, remaining_days=self._compute_remaining_days(item, now=now))
+                # add owner name if owned by reseller
+                owner_id = self._clean(item.get("owner_id"))
+                if owner_id:
+                    for owner_item in self._items:
+                        if owner_item.get("id") == owner_id:
+                            public["owner_name"] = owner_item.get("name", "")
+                            break
+                return public
+        return None
+
+    def count_trial_keys(self, reseller_id: str) -> int:
+        normalized_id = self._clean(reseller_id)
+        if not normalized_id:
+            return 0
+        with self._lock:
+            return sum(
+                1 for item in self._items
+                if item.get("role") == "user"
+                and item.get("owner_id") == normalized_id
+                and bool(item.get("is_trial", False))
+            )
+
+    def count_customers(self, reseller_id: str) -> dict[str, int]:
+        normalized_id = self._clean(reseller_id)
+        if not normalized_id:
+            return {"total": 0, "active": 0, "trial": 0, "paid": 0}
+        with self._lock:
+            now = datetime.now(timezone.utc)
+            total = 0
+            active = 0
+            trial = 0
+            paid = 0
+            for item in self._items:
+                if item.get("role") != "user" or item.get("owner_id") != normalized_id:
+                    continue
+                total += 1
+                if bool(item.get("is_trial", False)):
+                    trial += 1
+                else:
+                    paid += 1
+                remaining = self._compute_remaining_days(item, now=now)
+                if bool(item.get("enabled", True)) and (remaining is None or remaining > 0):
+                    active += 1
+            return {"total": total, "active": active, "trial": trial, "paid": paid}
 
 
 auth_service = AuthService(config.get_storage_backend())

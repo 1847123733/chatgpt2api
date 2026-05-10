@@ -74,7 +74,7 @@ def create_router(app_version: str) -> APIRouter:
         x_session_id: str | None = Header(default=None, alias="x-session-id"),
     ):
         identity = require_identity(authorization, x_session_id)
-        if identity.get("role") != "user":
+        if identity.get("role") not in ("user", "reseller"):
             return {"ok": True}
         if not auth_service.logout_session(
             extract_bearer_token(authorization),

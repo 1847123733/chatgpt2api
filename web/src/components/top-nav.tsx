@@ -16,15 +16,23 @@ const adminNavItems = [
   { href: "/prompt-square", label: "提示词广场" },
   { href: "/accounts", label: "号池管理" },
   { href: "/user-keys", label: "用户密钥" },
+  { href: "/resellers", label: "代理商" },
   { href: "/register", label: "注册机" },
   { href: "/image-manager", label: "图片管理" },
   { href: "/logs", label: "日志管理" },
   { href: "/settings", label: "设置" },
 ];
 
+const resellerNavItems = [
+  { href: "/image", label: "画图" },
+  { href: "/prompt-square", label: "提示词广场" },
+  { href: "/reseller/dashboard", label: "代理商面板" },
+];
+
 const userNavItems = [
   { href: "/image", label: "画图" },
   { href: "/prompt-square", label: "提示词广场" },
+  { href: "/user/dashboard", label: "我的" },
 ];
 
 export function TopNav() {
@@ -73,11 +81,11 @@ export function TopNav() {
     return null;
   }
 
-  const navItems = session.role === "admin" ? adminNavItems : userNavItems;
-  const roleLabel = session.role === "admin" ? "管理员" : "普通用户";
+  const navItems = session.role === "admin" ? adminNavItems : session.role === "reseller" ? resellerNavItems : userNavItems;
+  const roleLabel = session.role === "admin" ? "管理员" : session.role === "reseller" ? "代理商" : "普通用户";
   const displayName = session.name.trim() || roleLabel;
   const expiryLabel =
-    session.role === "user" && typeof session.remainingDays === "number"
+    session.role !== "admin" && typeof session.remainingDays === "number"
       ? `有效期剩余 ${Math.max(0, Math.floor(session.remainingDays))} 天`
       : "";
 

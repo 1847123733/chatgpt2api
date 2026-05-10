@@ -30,6 +30,15 @@ class AuthKeyModel(Base):
     data = Column(Text, nullable=False)
 
 
+class SettlementModel(Base):
+    """结款记录数据模型"""
+    __tablename__ = "settlements"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    settlement_id = Column(String(255), unique=True, nullable=False, index=True)
+    data = Column(Text, nullable=False)
+
+
 class DatabaseStorageBackend(StorageBackend):
     """数据库存储后端（支持 SQLite、PostgreSQL、MySQL 等）"""
 
@@ -71,7 +80,13 @@ class DatabaseStorageBackend(StorageBackend):
         """保存鉴权密钥数据到数据库"""
         self._save_rows(AuthKeyModel, auth_keys, "id", "key_id")
 
-    def _load_rows(self, model: type[AccountModel] | type[AuthKeyModel]) -> list[dict[str, Any]]:
+    def load_settlements(self) -> list[dict[str, Any]]:
+        return self._load_rows(SettlementModel)
+
+    def save_settlements(self, settlements: list[dict[str, Any]]) -> None:
+        self._save_rows(SettlementModel, settlements, "id", "settlement_id")
+
+    def _load_rows(self, model: type) -> list[dict[str, Any]]:
         session = self.Session()
         try:
             items = []
@@ -88,7 +103,7 @@ class DatabaseStorageBackend(StorageBackend):
 
     def _save_rows(
         self,
-        model: type[AccountModel] | type[AuthKeyModel],
+        model: type,
         items: list[dict[str, Any]],
         source_key: str,
         target_key: str | None = None,

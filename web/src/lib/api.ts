@@ -3,7 +3,7 @@ import { httpRequest, request } from "@/lib/request";
 export type AccountType = string;
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用";
 export type ImageModel = "gpt-image-2" | "codex-gpt-image-2";
-export type AuthRole = "admin" | "user";
+export type AuthRole = "admin" | "reseller" | "user";
 
 export type Account = {
   access_token: string;
@@ -630,6 +630,152 @@ export async function deleteUserKey(keyId: string) {
   return httpRequest<{ items: UserKey[] }>(`/api/auth/users/${keyId}`, {
     method: "DELETE",
   });
+}
+
+// ── Reseller Management (Admin) ──────────────────────────────────────
+
+export type ResellerKey = {
+  id: string;
+  name: string;
+  role: "reseller";
+  enabled: boolean;
+  created_at: string | null;
+  last_used_at: string | null;
+  expires_at?: string | null;
+  remaining_days?: number | null;
+  max_sessions?: number | null;
+  active_sessions?: number | null;
+  max_trial_keys?: number;
+  cost_per_user?: number;
+  total_customers?: number;
+  active_customers?: number;
+  trial_customers?: number;
+  paid_customers?: number;
+};
+
+export type ResellerCustomer = UserKey & {
+  owner_id: string;
+  is_trial: boolean;
+  tier: string;
+  monthly_limit: number;
+  monthly_usage: number;
+  monthly_reset_at?: string | null;
+};
+
+export type Settlement = {
+  id: string;
+  reseller_id: string;
+  period: string;
+  customer_count: number;
+  amount: number;
+  status: "paid" | "unpaid";
+  settled_at: string;
+  notes: string;
+};
+
+export type ResellerTier = {
+  name: string;
+  limit: number;
+  label: string;
+};
+
+// Admin: reseller management
+export async function fetchResellers() {
+  return httpRequest<{ items: ResellerKey[] }>("/api/auth/resellers");
+}
+
+export async function createResellerKey(name: string, validDays = 365, maxSessions = 4, maxTrialKeys = 20, costPerUser = 0) {
+  return httpRequest<{ item: ResellerKey; key: string; items: ResellerKey[] }>("/api/auth/resellers", {
+    method: "POST",
+    body: { name, valid_days: validDays, max_sessions: maxSessions, max_trial_keys: maxTrialKeys, cost_per_user: costPerUser },
+  });
+}
+
+export async function updateResellerKey(
+  keyId: string,
+  updates: { enabled?: boolean; name?: string; key?: string; valid_days?: number; renew_days?: number; max_sessions?: number; max_trial_keys?: number; cost_per_user?: number },
+) {
+  return httpRequest<{ item: ResellerKey; items: ResellerKey[] }>(`/api/auth/resellers/${keyId}`, {
+    method: "POST",
+    body: updates,
+  });
+}
+
+export async function deleteResellerKey(keyId: string) {
+  return httpRequest<{ items: ResellerKey[] }>(`/api/auth/resellers/${keyId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function clearResellerSessions(keyId: string) {
+  return httpRequest<{ item: ResellerKey }>(`/api/auth/resellers/${keyId}/clear-sessions`, {
+    method: "POST",
+  });
+}
+
+export async function fetchResellerUsage() {
+  return httpRequest<{ items: Array<{ reseller: ResellerKey; customer_count: number; usage: unknown }> }>("/api/auth/resellers/usage");
+}
+
+export async function createSettlement(resellerId: string, settlement: { period: string; customer_count: number; amount: number; status: string; notes: string }) {
+  return httpRequest<{ item: Settlement; items: Settlement[] }>(`/api/auth/resellers/${resellerId}/settlement`, {
+    method: "POST",
+    body: settlement,
+  });
+}
+
+export async function fetchSettlements(resellerId: string) {
+  return httpRequest<{ items: Settlement[] }>(`/api/auth/resellers/${resellerId}/settlements`);
+}
+
+// Reseller: customer management
+export async function fetchResellerCustomers() {
+  return httpRequest<{ items: ResellerCustomer[] }>("/api/reseller/customers");
+}
+
+export async function createResellerCustomer(name: string, isTrial: boolean, tier: string, validDays = 30, maxSessions = 4) {
+  return httpRequest<{ item: ResellerCustomer; key: string }>("/api/reseller/customers", {
+    method: "POST",
+    body: { name, is_trial: isTrial, tier, valid_days: validDays, max_sessions: maxSessions },
+  });
+}
+
+export async function updateResellerCustomer(
+  customerId: string,
+  updates: { name?: string; enabled?: boolean; key?: string; valid_days?: number; renew_days?: number; max_sessions?: number; tier?: string },
+) {
+  return httpRequest<{ item: ResellerCustomer }>(`/api/reseller/customers/${customerId}`, {
+    method: "POST",
+    body: updates,
+  });
+}
+
+export async function deleteResellerCustomer(customerId: string) {
+  return httpRequest<{ ok: boolean }>(`/api/reseller/customers/${customerId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function convertTrialToPaid(customerId: string, tier: string, validDays = 30) {
+  return httpRequest<{ item: ResellerCustomer }>(`/api/reseller/customers/${customerId}/convert-trial`, {
+    method: "POST",
+    body: { tier, valid_days: validDays },
+  });
+}
+
+export async function fetchResellerCustomerUsage() {
+  return httpRequest<{ summary: UserKeyUsageSummary; items: UserKeyUsageItem[] }>("/api/reseller/customers/usage");
+}
+
+export async function fetchResellerStats() {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return httpRequest<Record<string, any>>("/api/reseller/stats");
+}
+
+// User: self-service
+export async function fetchUserProfile() {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return httpRequest<{ item: Record<string, any> }>("/api/user/profile");
 }
 
 export async function fetchRegisterConfig() {

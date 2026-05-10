@@ -5,6 +5,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
 from api.support import require_identity, resolve_image_base_url
+from services.auth_service import auth_service
 from services.content_filter import check_request, request_text
 from services.log_service import LoggedCall
 from services.protocol import (
@@ -84,6 +85,10 @@ def create_router() -> APIRouter:
             x_session_id: str | None = Header(default=None, alias="x-session-id"),
     ):
         identity = require_identity(authorization, x_session_id)
+        if identity.get("role") == "user":
+            ok, _ = auth_service.check_and_increment_monthly_usage(str(identity.get("id")))
+            if not ok:
+                raise HTTPException(status_code=429, detail={"error": "本月图片生成额度已用完", "code": "monthly_limit_exceeded"})
         payload = body.model_dump(mode="python")
         payload["base_url"] = resolve_image_base_url(request)
         call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图", request_text=body.prompt)
@@ -105,6 +110,10 @@ def create_router() -> APIRouter:
             stream: bool | None = Form(default=None),
     ):
         identity = require_identity(authorization, x_session_id)
+        if identity.get("role") == "user":
+            ok, _ = auth_service.check_and_increment_monthly_usage(str(identity.get("id")))
+            if not ok:
+                raise HTTPException(status_code=429, detail={"error": "本月图片生成额度已用完", "code": "monthly_limit_exceeded"})
         call = LoggedCall(identity, "/v1/images/edits", model, "图生图", request_text=prompt)
         if n < 1 or n > 4:
             raise HTTPException(status_code=400, detail={"error": "n must be between 1 and 4"})

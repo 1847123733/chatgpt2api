@@ -5,6 +5,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from api.support import require_identity, resolve_image_base_url
+from services.auth_service import auth_service
 from services.content_filter import check_request
 from services.image_task_service import image_task_service
 from services.log_service import LoggedCall
@@ -49,6 +50,10 @@ def create_router() -> APIRouter:
         x_session_id: str | None = Header(default=None, alias="x-session-id"),
     ):
         identity = require_identity(authorization, x_session_id)
+        if identity.get("role") == "user":
+            ok, _ = auth_service.check_and_increment_monthly_usage(str(identity.get("id")))
+            if not ok:
+                raise HTTPException(status_code=429, detail={"error": "本月图片生成额度已用完", "code": "monthly_limit_exceeded"})
         await filter_or_log(LoggedCall(identity, "/api/image-tasks/generations", body.model, "文生图任务", request_text=body.prompt), body.prompt)
         try:
             return await run_in_threadpool(
@@ -76,6 +81,10 @@ def create_router() -> APIRouter:
         size: str | None = Form(default=None),
     ):
         identity = require_identity(authorization, x_session_id)
+        if identity.get("role") == "user":
+            ok, _ = auth_service.check_and_increment_monthly_usage(str(identity.get("id")))
+            if not ok:
+                raise HTTPException(status_code=429, detail={"error": "本月图片生成额度已用完", "code": "monthly_limit_exceeded"})
         await filter_or_log(LoggedCall(identity, "/api/image-tasks/edits", model, "图生图任务", request_text=prompt), prompt)
         uploads = [*(image or []), *(image_list or [])]
         if not uploads:
