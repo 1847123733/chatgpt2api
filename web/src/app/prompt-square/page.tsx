@@ -1,7 +1,7 @@
 "use client";
 
-import { Copy, ExternalLink, Heart, RefreshCw, Search, Sparkles, Wand2, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Copy, Edit3, ExternalLink, Heart, Plus, RefreshCw, Search, Sparkles, Trash2, Upload, Wand2, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
@@ -10,7 +10,18 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { fetchPromptSquare, type PromptSquareItem } from "@/lib/api";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  createUserPromptSquareItem,
+  deleteUserPromptSquareItem,
+  fetchPromptSquare,
+  fetchUserPromptSquare,
+  toggleUserPromptSquareLike,
+  type PromptSquareItem,
+  type UserPromptSquarePayload,
+  updateUserPromptSquareItem,
+  uploadUserPromptSquareImage,
+} from "@/lib/api";
 import webConfig from "@/constants/common-env";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 
@@ -18,6 +29,9 @@ const allFilter = "全部";
 const featuredFilter = "Featured";
 const favoritesFilter = "我的收藏";
 const favoritesStorageKey = "chatgpt2api.promptSquare.favorites";
+const userPageSize = 24;
+
+type PromptSource = "github" | "user";
 
 const categoryGroupLabels: Record<string, string> = {
   use_cases: "用途",
@@ -80,10 +94,22 @@ const languageLabelMap: Record<string, string> = {
   de: "德文",
 };
 
-function getPromptSquarePreviewSrc(url: string) {
+const emptyForm: UserPromptSquarePayload = {
+  title: "",
+  description: "",
+  prompt: "",
+  preview_image_url: "",
+  categories: [],
+  language: "zh",
+};
+
+function getPromptSquarePreviewSrc(url: string, source: PromptSource) {
   const normalized = String(url || "").trim();
   if (!normalized) {
     return "";
+  }
+  if (source === "user") {
+    return normalized;
   }
   if (normalized.startsWith("/api/image-proxy?")) {
     return normalized;
@@ -92,9 +118,7 @@ function getPromptSquarePreviewSrc(url: string) {
 }
 
 function readFavoriteIds() {
-  if (typeof window === "undefined") {
-    return [];
-  }
+  if (typeof window === "undefined") return [];
   try {
     const parsed = JSON.parse(window.localStorage.getItem(favoritesStorageKey) || "[]");
     return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
@@ -104,10 +128,9 @@ function readFavoriteIds() {
 }
 
 function writeFavoriteIds(ids: string[]) {
-  if (typeof window === "undefined") {
-    return;
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(favoritesStorageKey, JSON.stringify(ids));
   }
-  window.localStorage.setItem(favoritesStorageKey, JSON.stringify(ids));
 }
 
 function getItemCategories(item: PromptSquareItem) {
@@ -123,25 +146,31 @@ function getLanguageLabel(value: string) {
 }
 
 function getCategoryGroupEntries(items: PromptSquareItem[]) {
-  const groups: Record<string, Map<string, string>> = {
+  const grouped: Record<string, Map<string, string>> = {
     use_cases: new Map(),
     style: new Map(),
     subjects: new Map(),
+    custom: new Map(),
   };
 
   for (const item of items) {
     const categoryGroups = item.category_groups || {};
-    for (const group of Object.keys(groups)) {
+    for (const group of Object.keys(categoryGroupLabels)) {
       for (const category of categoryGroups[group] || []) {
-        groups[group].set(category.slug, categoryLabelMap[category.slug] || category.label);
+        grouped[group].set(category.slug, categoryLabelMap[category.slug] || category.label);
+      }
+    }
+    for (const category of getItemCategories(item)) {
+      if (!Object.values(grouped).some((values) => values.has(category.slug))) {
+        grouped.custom.set(category.slug, category.label);
       }
     }
   }
 
-  return Object.entries(groups)
+  return Object.entries(grouped)
     .map(([group, values]) => ({
       group,
-      label: categoryGroupLabels[group] || group,
+      label: categoryGroupLabels[group] || "自定义",
       items: Array.from(values.entries())
         .map(([slug, label]) => ({ slug, label }))
         .sort((a, b) => a.label.localeCompare(b.label)),
@@ -149,9 +178,19 @@ function getCategoryGroupEntries(items: PromptSquareItem[]) {
     .filter((group) => group.items.length > 0);
 }
 
+function parseCategories(value: string) {
+  return value
+    .split(/[,，\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 6);
+}
+
 export default function PromptSquarePage() {
   const router = useRouter();
   const { isCheckingAuth, session } = useAuthGuard();
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const [source, setSource] = useState<PromptSource>("github");
   const [items, setItems] = useState<PromptSquareItem[]>([]);
   const [repoUrl, setRepoUrl] = useState("");
   const [fetchedAt, setFetchedAt] = useState("");
@@ -162,46 +201,111 @@ export default function PromptSquarePage() {
   const [activeCategory, setActiveCategory] = useState("");
   const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
   const [detailItem, setDetailItem] = useState<PromptSquareItem | null>(null);
+  const [editingItem, setEditingItem] = useState<PromptSquareItem | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
+  const [form, setForm] = useState<UserPromptSquarePayload>(emptyForm);
+  const [categoryText, setCategoryText] = useState("");
+  const [isDraggingImage, setIsDraggingImage] = useState(false);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [userPage, setUserPage] = useState(1);
+  const [userTotal, setUserTotal] = useState(0);
+  const [userHasMore, setUserHasMore] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
+
+  const canManageUserPrompts = session?.role === "admin" || session?.role === "reseller";
 
   useEffect(() => {
     setFavoriteIds(readFavoriteIds());
   }, []);
 
   useEffect(() => {
-    if (!session) {
-      return;
-    }
+    setActiveFilter(allFilter);
+    setActiveCategory("");
+    setSearchText("");
+    setUserPage(1);
+  }, [source]);
 
-    const load = async (refresh = false) => {
+  const loadGitHub = async (refresh = false) => {
+    const result = await fetchPromptSquare(120, refresh);
+    setItems(result.items);
+    setRepoUrl(result.source.repo_url);
+    setFetchedAt(result.fetched_at);
+  };
+
+  const loadUserPrompts = async (page = userPage) => {
+    const result = await fetchUserPromptSquare({
+      page,
+      pageSize: userPageSize,
+      category: activeCategory,
+      search: searchText,
+    });
+    setItems(result.items);
+    setRepoUrl("");
+    setFetchedAt(result.fetched_at);
+    setUserTotal(result.total);
+    setUserHasMore(result.has_more);
+  };
+
+  useEffect(() => {
+    if (!session) return;
+    const load = async () => {
       try {
-        if (refresh) {
-          setIsRefreshing(true);
+        setIsLoading(true);
+        if (source === "github") {
+          await loadGitHub();
         } else {
-          setIsLoading(true);
+          await loadUserPrompts(userPage);
         }
-        const result = await fetchPromptSquare(120, refresh);
-        setItems(result.items);
-        setRepoUrl(result.source.repo_url);
-        setFetchedAt(result.fetched_at);
       } catch (error) {
-        toast.error(error instanceof Error ? error.message : "加载 GitHub 提示词失败");
+        toast.error(error instanceof Error ? error.message : "加载提示词失败");
       } finally {
         setIsLoading(false);
-        setIsRefreshing(false);
       }
     };
-
     void load();
-  }, [session]);
+  }, [activeCategory, searchText, session, source, userPage]);
 
   const languageFilters = useMemo(() => {
+    if (source === "user") return [];
     return Array.from(new Set(items.map((item) => item.language).filter(Boolean))).sort();
-  }, [items]);
+  }, [items, source]);
 
   const categoryGroups = useMemo(() => getCategoryGroupEntries(items), [items]);
   const favoriteSet = useMemo(() => new Set(favoriteIds), [favoriteIds]);
+
+  const visibleItems = useMemo(() => {
+    if (source === "user") return items;
+    const keyword = searchText.trim().toLowerCase();
+    return items.filter((item) => {
+      const filterMatched =
+        activeFilter === allFilter
+          ? true
+          : activeFilter === favoritesFilter
+            ? favoriteSet.has(item.id)
+            : activeFilter === featuredFilter
+              ? item.featured
+              : item.language === activeFilter;
+      if (!filterMatched) return false;
+      if (activeCategory && !getItemCategories(item).some((category) => category.slug === activeCategory)) return false;
+      if (!keyword) return true;
+      const haystack = [item.title, item.description, item.prompt, item.prompt_preview, item.author_name, item.language, ...item.languages]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(keyword);
+    });
+  }, [activeCategory, activeFilter, favoriteSet, items, searchText, source]);
+
+  const lightboxImages = useMemo(
+    () =>
+      visibleItems
+        .filter((item) => item.preview_image_url)
+        .map((item) => ({
+          id: item.id,
+          src: getPromptSquarePreviewSrc(item.preview_image_url, source),
+        })),
+    [source, visibleItems],
+  );
 
   const toggleFavorite = (item: PromptSquareItem) => {
     setFavoriteIds((current) => {
@@ -213,6 +317,16 @@ export default function PromptSquarePage() {
     });
   };
 
+  const toggleLike = async (item: PromptSquareItem) => {
+    try {
+      const result = await toggleUserPromptSquareLike(item.id);
+      setItems((current) => current.map((candidate) => (candidate.id === item.id ? result.item : candidate)));
+      setDetailItem((current) => (current?.id === item.id ? result.item : current));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "点赞失败");
+    }
+  };
+
   const applyPrompt = (item: PromptSquareItem) => {
     const params = new URLSearchParams({
       prompt: item.prompt,
@@ -221,49 +335,93 @@ export default function PromptSquarePage() {
     router.push(`/image?${params.toString()}`);
   };
 
-  const filteredItems = useMemo(() => {
-    const keyword = searchText.trim().toLowerCase();
-    return items.filter((item) => {
-      const filterMatched =
-        activeFilter === allFilter
-          ? true
-          : activeFilter === favoritesFilter
-            ? favoriteSet.has(item.id)
-            : activeFilter === featuredFilter
-              ? item.featured
-              : item.language === activeFilter;
-      if (!filterMatched) {
-        return false;
-      }
-      if (activeCategory && !getItemCategories(item).some((category) => category.slug === activeCategory)) {
-        return false;
-      }
-      if (!keyword) {
-        return true;
-      }
-      const haystack = [
-        item.title,
-        item.description,
-        item.prompt,
-        item.prompt_preview,
-        item.author_name,
-        item.language,
-        ...item.languages,
-      ]
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(keyword);
-    });
-  }, [activeCategory, activeFilter, favoriteSet, items, searchText]);
+  const openCreateForm = () => {
+    setEditingItem(null);
+    setForm(emptyForm);
+    setCategoryText("");
+    setIsDraggingImage(false);
+    setFormOpen(true);
+  };
 
-  const lightboxImages = useMemo(
-    () =>
-      filteredItems.map((item) => ({
-        id: item.id,
-        src: getPromptSquarePreviewSrc(item.preview_image_url),
-      })),
-    [filteredItems],
-  );
+  const openEditForm = (item: PromptSquareItem) => {
+    setEditingItem(item);
+    setForm({
+      title: item.title,
+      description: item.description,
+      prompt: item.prompt,
+      preview_image_url: item.preview_image_url,
+      categories: getItemCategories(item).map((category) => category.label),
+      language: item.language || "zh",
+    });
+    setCategoryText(getItemCategories(item).map((category) => category.label).join("，"));
+    setIsDraggingImage(false);
+    setFormOpen(true);
+  };
+
+  const uploadPromptImage = async (file: File | undefined) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast.error("请选择图片文件");
+      return;
+    }
+    try {
+      setIsUploadingImage(true);
+      const result = await uploadUserPromptSquareImage(file);
+      setForm((current) => ({ ...current, preview_image_url: result.url }));
+      toast.success("图片已上传");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "图片上传失败");
+    } finally {
+      setIsUploadingImage(false);
+      setIsDraggingImage(false);
+      if (imageInputRef.current) {
+        imageInputRef.current.value = "";
+      }
+    }
+  };
+
+  const submitForm = async () => {
+    const payload = {
+      ...form,
+      categories: parseCategories(categoryText),
+      language: form.language || "zh",
+    };
+    if (!payload.preview_image_url) {
+      toast.error("请先上传图片示例");
+      return;
+    }
+    try {
+      if (editingItem) {
+        const result = await updateUserPromptSquareItem(editingItem.id, payload);
+        setItems((current) => current.map((item) => (item.id === editingItem.id ? result.item : item)));
+        toast.success("Prompt 已更新");
+      } else {
+        const result = await createUserPromptSquareItem(payload);
+        setSource("user");
+        setSearchText("");
+        setActiveCategory("");
+        setUserPage(1);
+        setItems((current) => (source === "user" ? [result.item, ...current] : [result.item]));
+        setUserTotal((current) => current + 1);
+        toast.success("Prompt 已上传");
+      }
+      setFormOpen(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "保存失败");
+    }
+  };
+
+  const deleteItem = async (item: PromptSquareItem) => {
+    if (!window.confirm(`确定删除「${item.title}」吗？`)) return;
+    try {
+      await deleteUserPromptSquareItem(item.id);
+      setItems((current) => current.filter((candidate) => candidate.id !== item.id));
+      setDetailItem(null);
+      toast.success("Prompt 已删除");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "删除失败");
+    }
+  };
 
   if (isCheckingAuth || !session) {
     return (
@@ -275,52 +433,78 @@ export default function PromptSquarePage() {
 
   return (
     <section className="mx-auto w-full max-w-[1380px] pb-8">
-      <div className="overflow-hidden rounded-[32px] border border-white/70 bg-[linear-gradient(135deg,rgba(255,255,255,0.95),rgba(244,238,230,0.92))] shadow-[0_28px_90px_-42px_rgba(15,23,42,0.35)]">
+      <div className="overflow-hidden rounded-[28px] border border-white/70 bg-white/95 shadow-[0_28px_90px_-42px_rgba(15,23,42,0.35)]">
         <div className="border-b border-stone-200/70 px-5 py-6 sm:px-8 sm:py-8">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div className="max-w-2xl">
               <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-800">
                 <Sparkles className="size-3.5" />
-                运行时拉取 GitHub Prompt 广场
+                {source === "github" ? "运行时拉取 GitHub Prompt 广场" : "用户上传 Prompt 广场"}
               </div>
               <h1 className="text-3xl font-bold tracking-tight text-stone-950 sm:text-4xl">提示词广场</h1>
               <p className="mt-3 text-sm leading-6 text-stone-600 sm:text-base">
-                当前内容来自 GitHub 仓库运行时抓取并缓存，页面会展示仓库 README 里的真实示例图和 Prompt，点一下就能带到画图页。
+                GitHub Prompt 广场保留仓库示例；用户 Prompt 广场支持所有人上传、点赞排序、分类筛选和分页浏览。
               </p>
             </div>
 
-            <div className="w-full max-w-md">
+            <div className="w-full max-w-md space-y-3">
+              <div className="grid grid-cols-2 rounded-2xl border border-stone-200 bg-stone-50 p-1">
+                {[
+                  ["github", "GitHub Prompt"],
+                  ["user", "用户 Prompt"],
+                ].map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setSource(value as PromptSource)}
+                    className={`h-10 rounded-xl text-sm font-medium transition ${source === value ? "bg-stone-950 text-white" : "text-stone-600 hover:text-stone-950"}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
               <div className="relative">
                 <Search className="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-stone-400" />
                 <Input
                   value={searchText}
-                  onChange={(event) => setSearchText(event.target.value)}
-                  placeholder="搜索标题、分类、标签或 Prompt 关键词"
-                  className="h-12 rounded-full border-stone-200 bg-white pl-11 pr-4"
+                  onChange={(event) => {
+                    setSearchText(event.target.value);
+                    setUserPage(1);
+                  }}
+                  placeholder="搜索标题、分类、作者或 Prompt"
+                  className="h-12 rounded-2xl border-stone-200 bg-white pl-11 pr-4"
                 />
               </div>
             </div>
           </div>
 
-          <div className="mt-5 flex flex-wrap gap-2">
-            {[allFilter, featuredFilter, favoritesFilter, ...languageFilters].map((filter) => {
-              const active = filter === activeFilter;
-              return (
-                <button
-                  key={filter}
-                  type="button"
-                  onClick={() => setActiveFilter(filter)}
-                  className={
-                    active
-                      ? "rounded-full bg-stone-950 px-4 py-2 text-sm font-medium text-white"
-                      : "rounded-full border border-stone-200 bg-white px-4 py-2 text-sm font-medium text-stone-600 transition hover:border-stone-300 hover:text-stone-900"
-                  }
-                >
-                  {filter === favoritesFilter ? <Heart className="mr-1 inline size-3.5" /> : null}
-                  {filter === featuredFilter ? "精选" : languageFilters.includes(filter) ? getLanguageLabel(filter) : filter}
-                </button>
-              );
-            })}
+          <div className="mt-5 flex flex-wrap items-center gap-2">
+            {source === "github"
+              ? [allFilter, featuredFilter, favoritesFilter, ...languageFilters].map((filter) => {
+                  const active = filter === activeFilter;
+                  return (
+                    <button
+                      key={filter}
+                      type="button"
+                      onClick={() => setActiveFilter(filter)}
+                      className={
+                        active
+                          ? "rounded-full bg-stone-950 px-4 py-2 text-sm font-medium text-white"
+                          : "rounded-full border border-stone-200 bg-white px-4 py-2 text-sm font-medium text-stone-600 transition hover:border-stone-300 hover:text-stone-900"
+                      }
+                    >
+                      {filter === favoritesFilter ? <Heart className="mr-1 inline size-3.5" /> : null}
+                      {filter === featuredFilter ? "精选" : languageFilters.includes(filter) ? getLanguageLabel(filter) : filter}
+                    </button>
+                  );
+                })
+              : null}
+            {source === "user" ? (
+              <Button className="h-10 rounded-full bg-stone-950 px-4 text-white hover:bg-stone-800" onClick={openCreateForm}>
+                <Plus className="size-4" />
+                上传 Prompt
+              </Button>
+            ) : null}
           </div>
 
           {categoryGroups.length > 0 ? (
@@ -331,7 +515,10 @@ export default function PromptSquarePage() {
                   <button
                     type="button"
                     className="inline-flex items-center gap-1 rounded-full bg-stone-100 px-3 py-1 font-medium text-stone-600 hover:bg-stone-200"
-                    onClick={() => setActiveCategory("")}
+                    onClick={() => {
+                      setActiveCategory("");
+                      setUserPage(1);
+                    }}
                   >
                     清除分类
                     <X className="size-3" />
@@ -348,7 +535,10 @@ export default function PromptSquarePage() {
                         <button
                           key={category.slug}
                           type="button"
-                          onClick={() => setActiveCategory(active ? "" : category.slug)}
+                          onClick={() => {
+                            setActiveCategory(active ? "" : category.slug);
+                            setUserPage(1);
+                          }}
                         >
                           <Badge
                             variant={active ? "default" : "outline"}
@@ -368,7 +558,13 @@ export default function PromptSquarePage() {
 
         <div className="px-5 py-5 sm:px-8 sm:py-7">
           <div className="mb-5 flex items-center justify-between gap-3 text-sm text-stone-500">
-            <span>{isLoading ? "正在加载 GitHub 数据..." : `共 ${filteredItems.length} / ${items.length} 个模板`}</span>
+            <span>
+              {isLoading
+                ? "正在加载数据..."
+                : source === "user"
+                  ? `共 ${userTotal} 个用户 Prompt`
+                  : `共 ${visibleItems.length} / ${items.length} 个模板`}
+            </span>
             <div className="flex items-center gap-2">
               {repoUrl ? (
                 <a
@@ -387,11 +583,13 @@ export default function PromptSquarePage() {
                 onClick={async () => {
                   try {
                     setIsRefreshing(true);
-                    const result = await fetchPromptSquare(120, true);
-                    setItems(result.items);
-                    setRepoUrl(result.source.repo_url);
-                    setFetchedAt(result.fetched_at);
-                    toast.success("已刷新 GitHub Prompt 数据");
+                    if (source === "github") {
+                      await loadGitHub(true);
+                      toast.success("已刷新 GitHub Prompt 数据");
+                    } else {
+                      await loadUserPrompts(userPage);
+                      toast.success("已刷新用户 Prompt 数据");
+                    }
                   } catch (error) {
                     toast.error(error instanceof Error ? error.message : "刷新失败");
                   } finally {
@@ -406,54 +604,48 @@ export default function PromptSquarePage() {
             </div>
           </div>
 
-          {!isLoading && fetchedAt ? (
-            <div className="mb-5 text-xs text-stone-400">
-              最近抓取时间：{new Date(fetchedAt).toLocaleString("zh-CN")}
-            </div>
-          ) : null}
+          {!isLoading && fetchedAt ? <div className="mb-5 text-xs text-stone-400">最近更新时间：{new Date(fetchedAt).toLocaleString("zh-CN")}</div> : null}
 
           {isLoading ? (
-            <div className="rounded-[28px] border border-dashed border-stone-300 bg-white/75 px-6 py-14 text-center">
-              <p className="text-lg font-semibold text-stone-900">正在从 GitHub 拉取 Prompt 数据</p>
-              <p className="mt-2 text-sm text-stone-500">首次加载会稍慢一点，后端会做缓存。</p>
+            <div className="rounded-[24px] border border-dashed border-stone-300 bg-stone-50 px-6 py-14 text-center">
+              <p className="text-lg font-semibold text-stone-900">正在加载 Prompt 数据</p>
+              <p className="mt-2 text-sm text-stone-500">首次加载会稍慢一点。</p>
             </div>
-          ) : filteredItems.length > 0 ? (
+          ) : visibleItems.length > 0 ? (
             <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
-              {filteredItems.map((item) => (
-                <article
-                  key={item.id}
-                  className="overflow-hidden rounded-[28px] border border-stone-200/80 bg-white shadow-[0_20px_70px_-45px_rgba(15,23,42,0.45)]"
-                >
+              {visibleItems.map((item) => (
+                <article key={item.id} className="overflow-hidden rounded-[24px] border border-stone-200/80 bg-white shadow-[0_20px_70px_-45px_rgba(15,23,42,0.45)]">
                   <div className="relative aspect-[4/3] overflow-hidden bg-stone-100">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const currentIndex = filteredItems.findIndex((candidate) => candidate.id === item.id);
-                        if (currentIndex < 0) {
-                          return;
-                        }
-                        setLightboxIndex(currentIndex);
-                        setLightboxOpen(true);
-                      }}
-                      className="block h-full w-full cursor-zoom-in"
-                      aria-label={`放大查看 ${item.title}`}
-                    >
-                      <img
-                        src={getPromptSquarePreviewSrc(item.preview_image_url)}
-                        alt={item.title}
-                        loading="lazy"
-                        decoding="async"
-                        className="h-full w-full object-cover transition duration-200 hover:scale-[1.02]"
-                      />
-                    </button>
+                    {item.preview_image_url ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const currentIndex = lightboxImages.findIndex((candidate) => candidate.id === item.id);
+                          if (currentIndex >= 0) {
+                            setLightboxIndex(currentIndex);
+                            setLightboxOpen(true);
+                          }
+                        }}
+                        className="block h-full w-full cursor-zoom-in"
+                        aria-label={`放大查看 ${item.title}`}
+                      >
+                        <img
+                          src={getPromptSquarePreviewSrc(item.preview_image_url, source)}
+                          alt={item.title}
+                          loading="lazy"
+                          decoding="async"
+                          className="h-full w-full object-cover transition duration-200 hover:scale-[1.02]"
+                        />
+                      </button>
+                    ) : (
+                      <div className="flex h-full items-center justify-center bg-stone-100 px-8 text-center text-sm text-stone-400">暂无示例图</div>
+                    )}
                     <div className="absolute left-4 top-4 flex flex-wrap gap-2">
-                      <span className="rounded-full bg-black/55 px-3 py-1 text-xs font-medium text-white backdrop-blur-sm">
-                        {getLanguageLabel(item.language)}
-                      </span>
-                      {item.featured ? (
-                        <span className="rounded-full bg-amber-400/95 px-3 py-1 text-xs font-semibold text-stone-950">
-                          精选
-                        </span>
+                      <span className="rounded-full bg-black/55 px-3 py-1 text-xs font-medium text-white backdrop-blur-sm">{getLanguageLabel(item.language)}</span>
+                      {source === "user" ? (
+                        <span className="rounded-full bg-rose-500/90 px-3 py-1 text-xs font-semibold text-white">{item.like_count || 0} 赞</span>
+                      ) : item.featured ? (
+                        <span className="rounded-full bg-amber-400/95 px-3 py-1 text-xs font-semibold text-stone-950">精选</span>
                       ) : null}
                     </div>
                   </div>
@@ -469,75 +661,57 @@ export default function PromptSquarePage() {
                       <button
                         type="button"
                         className={`inline-flex size-9 shrink-0 items-center justify-center rounded-full border transition ${
-                          favoriteSet.has(item.id)
-                            ? "border-rose-200 bg-rose-50 text-rose-600"
-                            : "border-stone-200 bg-white text-stone-400 hover:text-rose-600"
+                          source === "user"
+                            ? item.liked_by_me
+                              ? "border-rose-200 bg-rose-50 text-rose-600"
+                              : "border-stone-200 bg-white text-stone-400 hover:text-rose-600"
+                            : favoriteSet.has(item.id)
+                              ? "border-rose-200 bg-rose-50 text-rose-600"
+                              : "border-stone-200 bg-white text-stone-400 hover:text-rose-600"
                         }`}
-                        onClick={() => toggleFavorite(item)}
-                        aria-label={favoriteSet.has(item.id) ? "取消收藏" : "收藏 Prompt"}
+                        onClick={() => (source === "user" ? toggleLike(item) : toggleFavorite(item))}
+                        aria-label={source === "user" ? "点赞 Prompt" : "收藏 Prompt"}
                       >
-                        <Heart className={`size-4 ${favoriteSet.has(item.id) ? "fill-current" : ""}`} />
+                        <Heart className={`size-4 ${source === "user" ? (item.liked_by_me ? "fill-current" : "") : favoriteSet.has(item.id) ? "fill-current" : ""}`} />
                       </button>
                     </div>
 
-                    <p className="mt-4 line-clamp-3 text-sm leading-6 text-stone-600">
-                      {item.description || item.prompt_preview}
-                    </p>
+                    <p className="mt-4 line-clamp-3 text-sm leading-6 text-stone-600">{item.description || item.prompt_preview}</p>
 
                     <div className="mt-4 flex flex-wrap gap-2">
-                      {getItemCategories(item).slice(0, 3).map((category) => (
+                      {getItemCategories(item).slice(0, 4).map((category) => (
                         <button
                           key={category.slug}
                           type="button"
-                          onClick={() => setActiveCategory(category.slug)}
+                          onClick={() => {
+                            setActiveCategory(category.slug);
+                            setUserPage(1);
+                          }}
                         >
-                          <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-800">
-                            {category.label}
-                          </span>
+                          <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-800">{category.label}</span>
                         </button>
-                      ))}
-                      {item.raycast_friendly ? (
-                        <span
-                          key="raycast"
-                          className="rounded-full bg-stone-100 px-2.5 py-1 text-[11px] font-medium text-stone-600"
-                        >
-                          Raycast 友好
-                        </span>
-                      ) : null}
-                      {item.languages.map((language) => (
-                        <span
-                          key={language}
-                          className="rounded-full bg-stone-100 px-2.5 py-1 text-[11px] font-medium text-stone-600"
-                        >
-                          {getLanguageLabel(language)}
-                        </span>
                       ))}
                     </div>
 
-                    <div className="mt-5 flex gap-2">
-                      <Button
-                        className="h-10 flex-1 rounded-full bg-stone-950 text-white hover:bg-stone-800"
-                        onClick={() => applyPrompt(item)}
-                      >
+                    <div className="mt-5 flex flex-wrap gap-2">
+                      <Button className="h-10 flex-1 rounded-full bg-stone-950 text-white hover:bg-stone-800" onClick={() => applyPrompt(item)}>
                         <Wand2 className="size-4" />
                         一键应用
                       </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="h-10 rounded-full border-stone-200 bg-white px-4 text-stone-600 hover:bg-stone-50"
-                        onClick={() => setDetailItem(item)}
-                      >
+                      <Button type="button" variant="outline" className="h-10 rounded-full border-stone-200 bg-white px-4 text-stone-600 hover:bg-stone-50" onClick={() => setDetailItem(item)}>
                         详情
                       </Button>
-                      {item.source_url ? (
-                        <a
-                          href={item.source_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex h-10 items-center justify-center rounded-full border border-stone-200 px-3 text-stone-600 transition hover:border-stone-300 hover:text-stone-900"
-                          aria-label="查看来源"
-                        >
+                      {source === "user" && canManageUserPrompts ? (
+                        <>
+                          <Button type="button" variant="outline" className="h-10 rounded-full border-stone-200 bg-white px-3 text-stone-600" onClick={() => openEditForm(item)}>
+                            <Edit3 className="size-4" />
+                          </Button>
+                          <Button type="button" variant="outline" className="h-10 rounded-full border-rose-200 bg-white px-3 text-rose-600 hover:bg-rose-50" onClick={() => deleteItem(item)}>
+                            <Trash2 className="size-4" />
+                          </Button>
+                        </>
+                      ) : item.source_url ? (
+                        <a href={item.source_url} target="_blank" rel="noreferrer" className="inline-flex h-10 items-center justify-center rounded-full border border-stone-200 px-3 text-stone-600 transition hover:border-stone-300 hover:text-stone-900" aria-label="查看来源">
                           <ExternalLink className="size-4" />
                         </a>
                       ) : null}
@@ -547,21 +721,128 @@ export default function PromptSquarePage() {
               ))}
             </div>
           ) : (
-            <div className="rounded-[28px] border border-dashed border-stone-300 bg-white/75 px-6 py-14 text-center">
+            <div className="rounded-[24px] border border-dashed border-stone-300 bg-stone-50 px-6 py-14 text-center">
               <p className="text-lg font-semibold text-stone-900">没有找到匹配的 Prompt</p>
-              <p className="mt-2 text-sm text-stone-500">试试更短的关键词，或者切换到其他分类。</p>
+              <p className="mt-2 text-sm text-stone-500">{source === "user" ? "上传第一个用户 Prompt，或者换个搜索词。" : "试试更短的关键词，或者切换到其他分类。"}</p>
             </div>
           )}
+
+          {source === "user" && !isLoading && userTotal > userPageSize ? (
+            <div className="mt-6 flex items-center justify-center gap-3">
+              <Button variant="outline" className="rounded-full border-stone-200 bg-white" disabled={userPage <= 1} onClick={() => setUserPage((page) => Math.max(1, page - 1))}>
+                上一页
+              </Button>
+              <span className="text-sm text-stone-500">第 {userPage} 页</span>
+              <Button variant="outline" className="rounded-full border-stone-200 bg-white" disabled={!userHasMore} onClick={() => setUserPage((page) => page + 1)}>
+                下一页
+              </Button>
+            </div>
+          ) : null}
         </div>
       </div>
 
-      <ImageLightbox
-        images={lightboxImages}
-        currentIndex={lightboxIndex}
-        open={lightboxOpen}
-        onOpenChange={setLightboxOpen}
-        onIndexChange={setLightboxIndex}
-      />
+      <ImageLightbox images={lightboxImages} currentIndex={lightboxIndex} open={lightboxOpen} onOpenChange={setLightboxOpen} onIndexChange={setLightboxIndex} />
+
+      <Dialog open={formOpen} onOpenChange={setFormOpen}>
+        <DialogContent className="max-h-[90vh] w-[min(94vw,760px)] overflow-y-auto rounded-3xl">
+          <DialogHeader>
+            <DialogTitle>{editingItem ? "管理用户 Prompt" : "上传用户 Prompt"}</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-4">
+            <div className="grid gap-2">
+              <label className="text-sm font-medium text-stone-700">标题</label>
+              <Input value={form.title} onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} className="rounded-2xl border-stone-200" />
+            </div>
+            <div className="grid gap-2">
+              <label className="text-sm font-medium text-stone-700">图片示例</label>
+              <input
+                ref={imageInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(event) => uploadPromptImage(event.target.files?.[0])}
+              />
+              <button
+                type="button"
+                onClick={() => imageInputRef.current?.click()}
+                onDragEnter={(event) => {
+                  event.preventDefault();
+                  setIsDraggingImage(true);
+                }}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  setIsDraggingImage(true);
+                }}
+                onDragLeave={(event) => {
+                  event.preventDefault();
+                  setIsDraggingImage(false);
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  void uploadPromptImage(event.dataTransfer.files?.[0]);
+                }}
+                className={`min-h-48 overflow-hidden rounded-2xl border border-dashed text-left transition ${
+                  isDraggingImage ? "border-stone-950 bg-stone-100" : "border-stone-300 bg-stone-50 hover:border-stone-400"
+                }`}
+                disabled={isUploadingImage}
+              >
+                {form.preview_image_url ? (
+                  <div className="relative aspect-[16/9] w-full bg-stone-100">
+                    <img
+                      src={form.preview_image_url}
+                      alt="图片示例预览"
+                      className="h-full w-full object-cover"
+                    />
+                    <div className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-black/55 px-4 py-3 text-sm text-white backdrop-blur-sm">
+                      <span>{isUploadingImage ? "上传中..." : "点击或拖动图片到这里更换"}</span>
+                      <span className="font-medium">更换</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex min-h-48 flex-col items-center justify-center gap-3 px-6 text-center">
+                    <div className="flex size-12 items-center justify-center rounded-full bg-white text-stone-500 shadow-sm">
+                      <Upload className={`size-5 ${isUploadingImage ? "animate-pulse" : ""}`} />
+                    </div>
+                    <div>
+                      <div className="text-sm font-semibold text-stone-900">{isUploadingImage ? "图片上传中..." : "点击选择图片，或拖动图片到这里"}</div>
+                      <div className="mt-1 text-xs text-stone-500">支持 JPG、PNG、WEBP、GIF，最大 8MB</div>
+                    </div>
+                  </div>
+                )}
+              </button>
+              {form.preview_image_url ? (
+                <button
+                  type="button"
+                  className="w-fit text-xs font-medium text-stone-500 hover:text-rose-600"
+                  onClick={() => setForm((current) => ({ ...current, preview_image_url: "" }))}
+                >
+                  移除图片
+                </button>
+              ) : null}
+            </div>
+            <div className="grid gap-2">
+              <label className="text-sm font-medium text-stone-700">分类</label>
+              <Input value={categoryText} onChange={(event) => setCategoryText(event.target.value)} className="rounded-2xl border-stone-200" placeholder="人像，摄影质感，产品营销" />
+            </div>
+            <div className="grid gap-2">
+              <label className="text-sm font-medium text-stone-700">描述</label>
+              <Textarea value={form.description || ""} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} className="min-h-24 rounded-2xl border-stone-200" />
+            </div>
+            <div className="grid gap-2">
+              <label className="text-sm font-medium text-stone-700">Prompt</label>
+              <Textarea value={form.prompt} onChange={(event) => setForm((current) => ({ ...current, prompt: event.target.value }))} className="min-h-48 rounded-2xl border-stone-200 font-mono text-xs leading-6" />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" className="rounded-xl border-stone-200 bg-white" onClick={() => setFormOpen(false)}>
+                取消
+              </Button>
+              <Button className="rounded-xl bg-stone-950 text-white hover:bg-stone-800" onClick={submitForm}>
+                保存
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={Boolean(detailItem)} onOpenChange={(open) => (!open ? setDetailItem(null) : null)}>
         <DialogContent className="flex h-[min(90vh,860px)] w-[min(94vw,980px)] flex-col overflow-hidden rounded-3xl p-0">
@@ -571,26 +852,12 @@ export default function PromptSquarePage() {
           {detailItem ? (
             <div className="grid flex-1 overflow-hidden lg:grid-cols-[360px_1fr]">
               <div className="overflow-y-auto border-b border-stone-100 bg-stone-50/70 p-5 lg:border-r lg:border-b-0">
-                <button
-                  type="button"
-                  className="aspect-[4/3] w-full overflow-hidden rounded-2xl bg-stone-100"
-                  onClick={() => {
-                    const currentIndex = filteredItems.findIndex((candidate) => candidate.id === detailItem.id);
-                    if (currentIndex >= 0) {
-                      setLightboxIndex(currentIndex);
-                      setLightboxOpen(true);
-                    }
-                  }}
-                >
-                  <img
-                    src={getPromptSquarePreviewSrc(detailItem.preview_image_url)}
-                    alt={detailItem.title}
-                    className="h-full w-full object-cover"
-                  />
-                </button>
+                <div className="aspect-[4/3] w-full overflow-hidden rounded-2xl bg-stone-100">
+                  {detailItem.preview_image_url ? <img src={getPromptSquarePreviewSrc(detailItem.preview_image_url, source)} alt={detailItem.title} className="h-full w-full object-cover" loading="lazy" /> : null}
+                </div>
                 <div className="mt-4 flex flex-wrap gap-2">
+                  {source === "user" ? <Badge variant="danger" className="rounded-md">{detailItem.like_count || 0} 赞</Badge> : null}
                   {detailItem.featured ? <Badge variant="warning" className="rounded-md">精选</Badge> : null}
-                  {detailItem.raycast_friendly ? <Badge variant="violet" className="rounded-md">Raycast 友好</Badge> : null}
                   {detailItem.languages.map((language) => (
                     <Badge key={language} variant="secondary" className="rounded-md">{getLanguageLabel(language)}</Badge>
                   ))}
@@ -605,12 +872,11 @@ export default function PromptSquarePage() {
                           type="button"
                           onClick={() => {
                             setActiveCategory(category.slug);
+                            setUserPage(1);
                             setDetailItem(null);
                           }}
                         >
-                          <Badge variant="outline" className="cursor-pointer rounded-md bg-white text-stone-600 hover:bg-stone-50">
-                            {category.label}
-                          </Badge>
+                          <Badge variant="outline" className="cursor-pointer rounded-md bg-white text-stone-600 hover:bg-stone-50">{category.label}</Badge>
                         </button>
                       ))}
                     </div>
@@ -618,7 +884,7 @@ export default function PromptSquarePage() {
                 ) : null}
                 <div className="mt-5 space-y-2 text-sm text-stone-500">
                   <div>作者：{detailItem.author_name || "社区作者"}</div>
-                  <div>发布时间：{detailItem.published_at || "-"}</div>
+                  <div>发布时间：{detailItem.published_at ? new Date(detailItem.published_at).toLocaleString("zh-CN") : "-"}</div>
                   <div>排名：No. {detailItem.rank}</div>
                 </div>
               </div>
@@ -649,38 +915,30 @@ export default function PromptSquarePage() {
                           复制
                         </Button>
                       </div>
-                      <pre className="max-h-[360px] overflow-auto rounded-2xl border border-stone-200 bg-stone-50 p-4 text-xs leading-6 whitespace-pre-wrap text-stone-700">
-                        {detailItem.prompt || detailItem.prompt_preview || "暂无 Prompt"}
-                      </pre>
+                      <pre className="max-h-[360px] overflow-auto rounded-2xl border border-stone-200 bg-stone-50 p-4 text-xs leading-6 whitespace-pre-wrap text-stone-700">{detailItem.prompt || detailItem.prompt_preview || "暂无 Prompt"}</pre>
                     </div>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-3 border-t border-stone-100 px-6 py-4">
                   <div className="flex gap-2">
-                    {detailItem.source_url ? (
-                      <a
-                        href={detailItem.source_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex h-10 items-center gap-2 rounded-xl border border-stone-200 bg-white px-4 text-sm font-medium text-stone-600 hover:bg-stone-50"
-                      >
-                        来源
-                        <ExternalLink className="size-4" />
-                      </a>
-                    ) : null}
-                    <Button
-                      variant="outline"
-                      className="h-10 rounded-xl border-stone-200 bg-white px-4 text-stone-600"
-                      onClick={() => toggleFavorite(detailItem)}
-                    >
-                      <Heart className={`size-4 ${favoriteSet.has(detailItem.id) ? "fill-current text-rose-600" : ""}`} />
-                      {favoriteSet.has(detailItem.id) ? "取消收藏" : "收藏"}
+                    <Button variant="outline" className="h-10 rounded-xl border-stone-200 bg-white px-4 text-stone-600" onClick={() => (source === "user" ? toggleLike(detailItem) : toggleFavorite(detailItem))}>
+                      <Heart className={`size-4 ${source === "user" ? (detailItem.liked_by_me ? "fill-current text-rose-600" : "") : favoriteSet.has(detailItem.id) ? "fill-current text-rose-600" : ""}`} />
+                      {source === "user" ? (detailItem.liked_by_me ? "取消点赞" : "点赞") : favoriteSet.has(detailItem.id) ? "取消收藏" : "收藏"}
                     </Button>
+                    {source === "user" && canManageUserPrompts ? (
+                      <>
+                        <Button variant="outline" className="h-10 rounded-xl border-stone-200 bg-white px-4 text-stone-600" onClick={() => openEditForm(detailItem)}>
+                          <Edit3 className="size-4" />
+                          管理
+                        </Button>
+                        <Button variant="outline" className="h-10 rounded-xl border-rose-200 bg-white px-4 text-rose-600" onClick={() => deleteItem(detailItem)}>
+                          <Trash2 className="size-4" />
+                          删除
+                        </Button>
+                      </>
+                    ) : null}
                   </div>
-                  <Button
-                    className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800"
-                    onClick={() => applyPrompt(detailItem)}
-                  >
+                  <Button className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800" onClick={() => applyPrompt(detailItem)}>
                     <Wand2 className="size-4" />
                     一键应用
                   </Button>

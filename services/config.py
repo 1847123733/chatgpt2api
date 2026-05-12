@@ -237,6 +237,12 @@ class ConfigStore:
         return path
 
     @property
+    def prompt_square_images_dir(self) -> Path:
+        path = DATA_DIR / "prompt_square_images"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
     def image_thumbnails_dir(self) -> Path:
         path = DATA_DIR / "image_thumbnails"
         path.mkdir(parents=True, exist_ok=True)

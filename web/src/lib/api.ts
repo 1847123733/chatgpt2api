@@ -181,8 +181,25 @@ export type PromptSquareItem = {
   source_name: string;
   source_url: string;
   published_at: string;
+  updated_at?: string;
   try_link: string;
   repo_entry_url: string;
+  like_count?: number;
+  liked_by_me?: boolean;
+  created_by?: {
+    id: string;
+    name: string;
+    role: AuthRole;
+  };
+};
+
+export type UserPromptSquarePayload = {
+  title: string;
+  prompt: string;
+  description?: string;
+  preview_image_url?: string;
+  categories?: string[];
+  language?: string;
 };
 
 export type ImageResponse = {
@@ -347,6 +364,58 @@ export async function fetchPromptSquare(limit = 120, refresh = false) {
     limit: number;
     items: PromptSquareItem[];
   }>(`/api/prompt-square?${params.toString()}`);
+}
+
+export async function fetchUserPromptSquare(params: { page?: number; pageSize?: number; category?: string; search?: string } = {}) {
+  const searchParams = new URLSearchParams();
+  searchParams.set("page", String(params.page || 1));
+  searchParams.set("page_size", String(params.pageSize || 24));
+  if (params.category) searchParams.set("category", params.category);
+  if (params.search) searchParams.set("search", params.search);
+  return httpRequest<{
+    source: { name: string; repo_url: string; readme_url: string; cover_image_url: string };
+    fetched_at: string;
+    total: number;
+    page: number;
+    page_size: number;
+    has_more: boolean;
+    items: PromptSquareItem[];
+  }>(`/api/user-prompt-square?${searchParams.toString()}`);
+}
+
+export async function createUserPromptSquareItem(payload: UserPromptSquarePayload) {
+  return httpRequest<{ item: PromptSquareItem }>("/api/user-prompt-square", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function uploadUserPromptSquareImage(file: File) {
+  const formData = new FormData();
+  formData.append("image", file);
+  return httpRequest<{ url: string; path: string }>("/api/user-prompt-square/images", {
+    method: "POST",
+    body: formData,
+  });
+}
+
+export async function updateUserPromptSquareItem(itemId: string, payload: UserPromptSquarePayload) {
+  return httpRequest<{ item: PromptSquareItem }>(`/api/user-prompt-square/${itemId}`, {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function deleteUserPromptSquareItem(itemId: string) {
+  return httpRequest<{ items: PromptSquareItem[] }>(`/api/user-prompt-square/${itemId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function toggleUserPromptSquareLike(itemId: string) {
+  return httpRequest<{ item: PromptSquareItem }>(`/api/user-prompt-square/${itemId}/like`, {
+    method: "POST",
+  });
 }
 
 export async function createAccounts(tokens: string[]) {
@@ -753,6 +822,12 @@ export async function updateResellerCustomer(
 export async function deleteResellerCustomer(customerId: string) {
   return httpRequest<{ ok: boolean }>(`/api/reseller/customers/${customerId}`, {
     method: "DELETE",
+  });
+}
+
+export async function clearResellerCustomerSessions(customerId: string) {
+  return httpRequest<{ item: ResellerCustomer }>(`/api/reseller/customers/${customerId}/clear-sessions`, {
+    method: "POST",
   });
 }
 

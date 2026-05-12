@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -275,6 +275,7 @@ class LoggedCall:
     summary: str
     started: float = field(default_factory=time.time)
     request_text: str = ""
+    on_success: Callable[[], None] | None = None
 
     async def run(self, handler, *args, sse: str = "openai"):
         from services.protocol.conversation import ImageGenerationError
@@ -293,6 +294,7 @@ class LoggedCall:
 
         if isinstance(result, dict):
             self.log("调用完成", result)
+            self._mark_success()
             return result
 
         sender = anthropic_sse_stream if sse == "anthropic" else sse_json_stream
@@ -309,8 +311,17 @@ class LoggedCall:
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
         if not has_first:
             self.log("流式调用结束")
+            self._mark_success()
             return StreamingResponse(sender(()), media_type="text/event-stream")
         return StreamingResponse(sender(self.stream(itertools.chain([first], result))), media_type="text/event-stream")
+
+    def _mark_success(self) -> None:
+        if self.on_success is None:
+            return
+        try:
+            self.on_success()
+        except Exception:
+            pass
 
     def stream(self, items):
         urls: list[str] = []
@@ -326,6 +337,7 @@ class LoggedCall:
         finally:
             if not failed:
                 self.log("流式调用结束", urls=urls)
+                self._mark_success()
 
     def log(self, suffix: str, result: object = None, status: str = "success", error: str = "",
             urls: list[str] | None = None) -> None:

@@ -86,12 +86,14 @@ def create_router() -> APIRouter:
     ):
         identity = require_identity(authorization, x_session_id)
         if identity.get("role") == "user":
-            ok, _ = auth_service.check_and_increment_monthly_usage(str(identity.get("id")))
+            ok, _ = auth_service.check_monthly_usage_available(str(identity.get("id")))
             if not ok:
                 raise HTTPException(status_code=429, detail={"error": "本月图片生成额度已用完", "code": "monthly_limit_exceeded"})
         payload = body.model_dump(mode="python")
         payload["base_url"] = resolve_image_base_url(request)
         call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图", request_text=body.prompt)
+        if identity.get("role") == "user":
+            call.on_success = lambda: auth_service.increment_monthly_usage(str(identity.get("id")))
         await filter_or_log(call, body.prompt)
         return await call.run(openai_v1_image_generations.handle, payload)
 
@@ -111,10 +113,12 @@ def create_router() -> APIRouter:
     ):
         identity = require_identity(authorization, x_session_id)
         if identity.get("role") == "user":
-            ok, _ = auth_service.check_and_increment_monthly_usage(str(identity.get("id")))
+            ok, _ = auth_service.check_monthly_usage_available(str(identity.get("id")))
             if not ok:
                 raise HTTPException(status_code=429, detail={"error": "本月图片生成额度已用完", "code": "monthly_limit_exceeded"})
         call = LoggedCall(identity, "/v1/images/edits", model, "图生图", request_text=prompt)
+        if identity.get("role") == "user":
+            call.on_success = lambda: auth_service.increment_monthly_usage(str(identity.get("id")))
         if n < 1 or n > 4:
             raise HTTPException(status_code=400, detail={"error": "n must be between 1 and 4"})
         await filter_or_log(call, prompt)

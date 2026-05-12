@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Ban, CheckCircle2, Copy, KeyRound, LoaderCircle, Pencil, Plus, Trash2, UserPlus } from "lucide-react";
+import { Ban, CheckCircle2, Copy, KeyRound, LoaderCircle, LogOut, Pencil, Plus, Trash2, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   convertTrialToPaid,
   createResellerCustomer,
+  clearResellerCustomerSessions,
   deleteResellerCustomer,
   fetchResellerCustomers,
   updateResellerCustomer,
@@ -32,6 +33,8 @@ const TIER_OPTIONS = [
   { value: "300", label: "300 次/月" },
   { value: "unlimited", label: "不限制" },
 ];
+
+const RESELLER_CUSTOMERS_CHANGED_EVENT = "reseller-customers-changed";
 
 function formatDateTime(value?: string | null) {
   if (!value) return "—";
@@ -50,6 +53,10 @@ function formatRemainingDays(value: unknown) {
 
 function tierLabel(tier: string) {
   return TIER_OPTIONS.find((t) => t.value === tier)?.label || tier;
+}
+
+function notifyCustomersChanged() {
+  window.dispatchEvent(new Event(RESELLER_CUSTOMERS_CHANGED_EVENT));
 }
 
 export function ResellerCustomersCard() {
@@ -130,6 +137,7 @@ export function ResellerCustomersCard() {
       setCreateValidDays("30");
       setCreateMaxSessions("4");
       setIsCreateOpen(false);
+      notifyCustomersChanged();
       toast.success("客户已创建");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "创建客户失败");
@@ -143,6 +151,7 @@ export function ResellerCustomersCard() {
     try {
       const data = await updateResellerCustomer(item.id, { enabled: !item.enabled });
       setItems((prev) => prev.map((i) => (i.id === item.id ? data.item : i)));
+      notifyCustomersChanged();
       toast.success(item.enabled ? "客户已禁用" : "客户已启用");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "更新客户失败");
@@ -170,6 +179,7 @@ export function ResellerCustomersCard() {
       });
       setItems((prev) => prev.map((i) => (i.id === item.id ? data.item : i)));
       setEditingItem(null);
+      notifyCustomersChanged();
       toast.success("客户信息已更新");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "更新客户失败");
@@ -187,6 +197,7 @@ export function ResellerCustomersCard() {
       const data = await updateResellerCustomer(item.id, { renew_days: days });
       setItems((prev) => prev.map((i) => (i.id === item.id ? data.item : i)));
       setRenewingItem(null);
+      notifyCustomersChanged();
       toast.success("已续期");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "续期失败");
@@ -203,6 +214,7 @@ export function ResellerCustomersCard() {
       await deleteResellerCustomer(item.id);
       setItems((prev) => prev.filter((i) => i.id !== item.id));
       setDeletingItem(null);
+      notifyCustomersChanged();
       toast.success("客户已删除");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "删除客户失败");
@@ -220,9 +232,23 @@ export function ResellerCustomersCard() {
       const data = await convertTrialToPaid(item.id, convertTier, days);
       setItems((prev) => prev.map((i) => (i.id === item.id ? data.item : i)));
       setConvertingItem(null);
+      notifyCustomersChanged();
       toast.success("已转为付费客户");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "转正失败");
+    } finally {
+      setItemPending(item.id, false);
+    }
+  };
+
+  const handleClearSessions = async (item: ResellerCustomer) => {
+    setItemPending(item.id, true);
+    try {
+      const data = await clearResellerCustomerSessions(item.id);
+      setItems((prev) => prev.map((i) => (i.id === item.id ? data.item : i)));
+      toast.success("已清空在线会话");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "清空在线会话失败");
     } finally {
       setItemPending(item.id, false);
     }
@@ -282,6 +308,7 @@ export function ResellerCustomersCard() {
             <div className="space-y-3">
               {items.map((item) => {
                 const isPending = pendingIds.has(item.id);
+                const activeSessions = Math.max(0, Number(item.active_sessions) || 0);
                 return (
                   <div key={item.id} className="flex flex-col gap-3 rounded-xl border border-stone-200 bg-white px-4 py-4 md:flex-row md:items-center md:justify-between">
                     <div className="min-w-0 space-y-2">
@@ -299,10 +326,21 @@ export function ResellerCustomersCard() {
                         <span>本月用量 {item.monthly_usage} / {item.monthly_limit === -1 ? "不限" : item.monthly_limit}</span>
                         <span>剩余 {formatRemainingDays(item.remaining_days)}</span>
                         <span>到期 {formatDateTime(item.expires_at)}</span>
+                        <span>在线数 {activeSessions} / {Math.max(1, Number(item.max_sessions) || 4)}</span>
                       </div>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-9 rounded-xl border-amber-200 bg-white px-4 text-amber-700 hover:bg-amber-50 hover:text-amber-800"
+                        onClick={() => void handleClearSessions(item)}
+                        disabled={isPending || activeSessions === 0}
+                      >
+                        {isPending ? <LoaderCircle className="size-4 animate-spin" /> : <LogOut className="size-4" />}
+                        一键清空在线
+                      </Button>
                       {item.is_trial && (
                         <Button
                           type="button"

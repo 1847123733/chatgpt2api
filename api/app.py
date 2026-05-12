@@ -48,6 +48,12 @@ def create_app() -> FastAPI:
     app.include_router(system.create_router(app_version))
     if config.images_dir.exists():
         app.mount("/images", StaticFiles(directory=str(config.images_dir)), name="images")
+    if config.prompt_square_images_dir.exists():
+        app.mount(
+            "/prompt-square-images",
+            StaticFiles(directory=str(config.prompt_square_images_dir)),
+            name="prompt-square-images",
+        )
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_web(full_path: str):

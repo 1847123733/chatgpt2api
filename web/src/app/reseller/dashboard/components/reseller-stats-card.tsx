@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { fetchResellerStats } from "@/lib/api";
 
+const RESELLER_CUSTOMERS_CHANGED_EVENT = "reseller-customers-changed";
+
 type Stats = {
   total_customers?: number;
   active_customers?: number;
@@ -15,6 +17,10 @@ type Stats = {
   paid_customers?: number;
   max_trial_keys?: number;
   trial_quota_remaining?: number;
+  total?: number;
+  active?: number;
+  trial?: number;
+  paid?: number;
   [key: string]: unknown;
 };
 
@@ -32,6 +38,14 @@ function MetricBlock({ label, value, tone = "default" }: { label: string; value:
       <div className="mt-1 text-2xl font-semibold tracking-tight">{value}</div>
     </div>
   );
+}
+
+function numericStat(...values: unknown[]) {
+  for (const value of values) {
+    const parsed = typeof value === "number" ? value : Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
 }
 
 export function ResellerStatsCard() {
@@ -56,6 +70,21 @@ export function ResellerStatsCard() {
     didLoadRef.current = true;
     void load();
   }, []);
+
+  useEffect(() => {
+    const handleCustomersChanged = () => {
+      void load();
+    };
+    window.addEventListener(RESELLER_CUSTOMERS_CHANGED_EVENT, handleCustomersChanged);
+    return () => window.removeEventListener(RESELLER_CUSTOMERS_CHANGED_EVENT, handleCustomersChanged);
+  }, []);
+
+  const totalCustomers = numericStat(stats.total_customers, stats.total);
+  const activeCustomers = numericStat(stats.active_customers, stats.active);
+  const trialCustomers = numericStat(stats.trial_customers, stats.trial);
+  const paidCustomers = numericStat(stats.paid_customers, stats.paid);
+  const maxTrialKeys = numericStat(stats.max_trial_keys);
+  const trialQuotaRemaining = numericStat(stats.trial_quota_remaining, maxTrialKeys - trialCustomers);
 
   return (
     <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
@@ -82,12 +111,12 @@ export function ResellerStatsCard() {
           </div>
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            <MetricBlock label="总客户数" value={stats.total_customers ?? 0} />
-            <MetricBlock label="活跃客户" value={stats.active_customers ?? 0} tone="success" />
-            <MetricBlock label="试用客户" value={stats.trial_customers ?? 0} tone="info" />
-            <MetricBlock label="付费客户" value={stats.paid_customers ?? 0} tone="default" />
-            <MetricBlock label="最大试用数" value={stats.max_trial_keys ?? 0} />
-            <MetricBlock label="试用配额剩余" value={stats.trial_quota_remaining ?? 0} tone={stats.trial_quota_remaining === 0 ? "danger" : "success"} />
+            <MetricBlock label="总客户数" value={totalCustomers} />
+            <MetricBlock label="活跃客户" value={activeCustomers} tone="success" />
+            <MetricBlock label="试用客户" value={trialCustomers} tone="info" />
+            <MetricBlock label="付费客户" value={paidCustomers} tone="default" />
+            <MetricBlock label="最大试用数" value={maxTrialKeys} />
+            <MetricBlock label="试用配额剩余" value={trialQuotaRemaining} tone={trialQuotaRemaining === 0 ? "danger" : "success"} />
           </div>
         )}
       </CardContent>

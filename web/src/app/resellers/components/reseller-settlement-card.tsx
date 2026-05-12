@@ -132,6 +132,10 @@ export function ResellerSettlementCard() {
   };
 
   const selectedReseller = resellers.find((r) => r.id === selectedId);
+  const unpaidCustomerCount = items.reduce((total, item) => {
+    if (item.status === "paid") return total;
+    return total + (Number(item.customer_count) || 0);
+  }, 0);
 
   return (
     <>
@@ -188,6 +192,7 @@ export function ResellerSettlementCard() {
               <span>活跃客户 {Number(selectedReseller.active_customers) || 0}</span>
               <span>付费客户 {Number(selectedReseller.paid_customers) || 0}</span>
               <span>试用客户 {Number(selectedReseller.trial_customers) || 0}</span>
+              <span>未结款客户数 {unpaidCustomerCount}</span>
               <span>单价 {Number(selectedReseller.cost_per_user) || 0}</span>
             </div>
           )}

@@ -51,7 +51,7 @@ def create_router() -> APIRouter:
     ):
         identity = require_identity(authorization, x_session_id)
         if identity.get("role") == "user":
-            ok, _ = auth_service.check_and_increment_monthly_usage(str(identity.get("id")))
+            ok, _ = auth_service.check_monthly_usage_available(str(identity.get("id")))
             if not ok:
                 raise HTTPException(status_code=429, detail={"error": "本月图片生成额度已用完", "code": "monthly_limit_exceeded"})
         await filter_or_log(LoggedCall(identity, "/api/image-tasks/generations", body.model, "文生图任务", request_text=body.prompt), body.prompt)
@@ -82,7 +82,7 @@ def create_router() -> APIRouter:
     ):
         identity = require_identity(authorization, x_session_id)
         if identity.get("role") == "user":
-            ok, _ = auth_service.check_and_increment_monthly_usage(str(identity.get("id")))
+            ok, _ = auth_service.check_monthly_usage_available(str(identity.get("id")))
             if not ok:
                 raise HTTPException(status_code=429, detail={"error": "本月图片生成额度已用完", "code": "monthly_limit_exceeded"})
         await filter_or_log(LoggedCall(identity, "/api/image-tasks/edits", model, "图生图任务", request_text=prompt), prompt)

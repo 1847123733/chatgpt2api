@@ -8,6 +8,11 @@ from pathlib import Path
 
 os.environ.setdefault("CHATGPT2API_AUTH_KEY", "test-auth")
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from api import reseller as reseller_module
+from api import support as support_module
 from services.account_service import AccountService
 from services.auth_service import AuthError, AuthService
 from services.storage.json_storage import JSONStorageBackend
@@ -226,6 +231,130 @@ class AuthServiceTests(unittest.TestCase):
             with self.assertRaises(AuthError) as context:
                 service.authenticate(raw_key, allow_create_session=True)
             self.assertEqual(context.exception.code, "key_expired")
+
+    def test_reseller_customer_counts_reload_storage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            backend = JSONStorageBackend(Path(tmp_dir) / "accounts.json", Path(tmp_dir) / "auth_keys.json")
+            first_service = AuthService(backend)
+            reseller, _ = first_service.create_key(role="reseller", name="Agency")
+
+            second_service = AuthService(backend)
+            second_service.create_key(role="user", name="Trial A", owner_id=str(reseller["id"]), is_trial=True)
+
+            self.assertEqual(first_service.count_trial_keys(str(reseller["id"])), 1)
+            self.assertEqual(first_service.count_customers(str(reseller["id"])), {"total": 1, "active": 1, "trial": 1, "paid": 0})
+
+    def test_disabling_reseller_disables_owned_users(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AuthService(JSONStorageBackend(Path(tmp_dir) / "accounts.json", Path(tmp_dir) / "auth_keys.json"))
+            reseller, _ = service.create_key(role="reseller", name="Agency")
+            owned, _ = service.create_key(role="user", name="Owned User", owner_id=str(reseller["id"]))
+            independent, _ = service.create_key(role="user", name="Independent User")
+
+            updated = service.update_key(str(reseller["id"]), {"enabled": False}, role="reseller")
+
+            self.assertIsNotNone(updated)
+            self.assertFalse(updated["enabled"])
+            users = {str(item["id"]): item for item in service.list_keys(role="user")}
+            self.assertFalse(users[str(owned["id"])]["enabled"])
+            self.assertTrue(users[str(independent["id"])]["enabled"])
+
+            service.update_key(str(reseller["id"]), {"enabled": True}, role="reseller")
+            users = {str(item["id"]): item for item in service.list_keys(role="user")}
+            self.assertFalse(users[str(owned["id"])]["enabled"])
+
+    def test_deleting_reseller_deletes_owned_users(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AuthService(JSONStorageBackend(Path(tmp_dir) / "accounts.json", Path(tmp_dir) / "auth_keys.json"))
+            reseller, _ = service.create_key(role="reseller", name="Agency")
+            owned, _ = service.create_key(role="user", name="Owned User", owner_id=str(reseller["id"]))
+            independent, _ = service.create_key(role="user", name="Independent User")
+
+            deleted = service.delete_key(str(reseller["id"]), role="reseller")
+
+            self.assertTrue(deleted)
+            self.assertEqual(service.list_keys(role="reseller"), [])
+            users = {str(item["id"]): item for item in service.list_keys(role="user")}
+            self.assertNotIn(str(owned["id"]), users)
+            self.assertIn(str(independent["id"]), users)
+
+    def test_monthly_usage_can_be_checked_without_incrementing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AuthService(JSONStorageBackend(Path(tmp_dir) / "accounts.json", Path(tmp_dir) / "auth_keys.json"))
+            user, _ = service.create_key(role="user", name="Trial A", monthly_limit=1)
+
+            ok, checked = service.check_monthly_usage_available(str(user["id"]))
+
+            self.assertTrue(ok)
+            self.assertIsNotNone(checked)
+            self.assertEqual(checked["monthly_usage"], 0)
+
+            incremented = service.increment_monthly_usage(str(user["id"]))
+            self.assertIsNotNone(incremented)
+            self.assertEqual(incremented["monthly_usage"], 1)
+
+            ok, checked = service.check_monthly_usage_available(str(user["id"]))
+            self.assertFalse(ok)
+            self.assertIsNotNone(checked)
+            self.assertEqual(checked["monthly_usage"], 1)
+
+
+class ResellerApiAuthTests(unittest.TestCase):
+    def _with_reseller_client(self):
+        tmp_dir = tempfile.TemporaryDirectory()
+        service = AuthService(JSONStorageBackend(Path(tmp_dir.name) / "accounts.json", Path(tmp_dir.name) / "auth_keys.json"))
+        _, raw_key = service.create_key(role="reseller", name="Agency")
+        identity = service.authenticate(raw_key, allow_create_session=True)
+        self.assertIsNotNone(identity)
+
+        original_reseller_auth_service = reseller_module.auth_service
+        original_support_auth_service = support_module.auth_service
+        reseller_module.auth_service = service
+        support_module.auth_service = service
+        app = FastAPI()
+        app.include_router(reseller_module.create_router())
+        client = TestClient(app)
+        headers = {
+            "Authorization": f"Bearer {raw_key}",
+            "x-session-id": str(identity["session_id"]),
+        }
+        return tmp_dir, service, client, headers, original_reseller_auth_service, original_support_auth_service
+
+    def test_reseller_routes_accept_x_session_id_header(self) -> None:
+        tmp_dir, _service, client, headers, original_reseller_auth_service, original_support_auth_service = self._with_reseller_client()
+        try:
+            response = client.get("/api/reseller/customers", headers=headers)
+        finally:
+            reseller_module.auth_service = original_reseller_auth_service
+            support_module.auth_service = original_support_auth_service
+            tmp_dir.cleanup()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"items": []})
+
+    def test_reseller_stats_use_customer_field_names(self) -> None:
+        tmp_dir, _service, client, headers, original_reseller_auth_service, original_support_auth_service = self._with_reseller_client()
+        try:
+            create_response = client.post(
+                "/api/reseller/customers",
+                headers=headers,
+                json={"name": "Trial A", "is_trial": True, "tier": "trial", "valid_days": 1, "max_sessions": 4},
+            )
+            response = client.get("/api/reseller/stats", headers=headers)
+        finally:
+            reseller_module.auth_service = original_reseller_auth_service
+            support_module.auth_service = original_support_auth_service
+            tmp_dir.cleanup()
+
+        self.assertEqual(create_response.status_code, 200)
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["total_customers"], 1)
+        self.assertEqual(payload["active_customers"], 1)
+        self.assertEqual(payload["trial_customers"], 1)
+        self.assertEqual(payload["paid_customers"], 0)
+        self.assertEqual(payload["max_trial_keys"], 20)
+        self.assertEqual(payload["trial_quota_remaining"], 19)
 
 
 if __name__ == "__main__":

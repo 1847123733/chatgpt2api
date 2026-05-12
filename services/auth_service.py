@@ -489,6 +489,12 @@ class AuthService:
                         next_item["owner_id"] = self._clean(updates.get("owner_id"))
                 next_item, _ = self._prune_sessions_locked(next_item)
                 self._items[index] = next_item
+                if current_role == "reseller" and updates.get("enabled") is False:
+                    for customer_index, customer in enumerate(self._items):
+                        if customer.get("role") == "user" and customer.get("owner_id") == normalized_id:
+                            next_customer = dict(customer)
+                            next_customer["enabled"] = False
+                            self._items[customer_index] = next_customer
                 self._save()
                 return self._public_item(next_item, remaining_days=self._compute_remaining_days(next_item))
         return None
@@ -500,10 +506,23 @@ class AuthService:
         with self._lock:
             self._reload_locked()
             before = len(self._items)
+            cascade_customer_delete = any(
+                item.get("id") == normalized_id
+                and item.get("role") == "reseller"
+                and (role is None or item.get("role") == role)
+                for item in self._items
+            )
             self._items = [
                 item
                 for item in self._items
-                if not (item.get("id") == normalized_id and (role is None or item.get("role") == role))
+                if not (
+                    (item.get("id") == normalized_id and (role is None or item.get("role") == role))
+                    or (
+                        cascade_customer_delete
+                        and item.get("role") == "user"
+                        and item.get("owner_id") == normalized_id
+                    )
+                )
             ]
             if len(self._items) == before:
                 return False
@@ -644,7 +663,15 @@ class AuthService:
                 return self._public_item(next_item, remaining_days=self._compute_remaining_days(next_item))
         return None
 
-    def check_and_increment_monthly_usage(self, key_id: str, count: int = 1) -> tuple[bool, dict[str, object] | None]:
+    def _prepare_monthly_usage_item_locked(self, item: dict[str, object], *, now: datetime) -> dict[str, object]:
+        next_item = dict(item)
+        reset_at = _parse_iso(next_item.get("monthly_reset_at"))
+        if reset_at is None or reset_at.year != now.year or reset_at.month != now.month:
+            next_item["monthly_usage"] = 0
+            next_item["monthly_reset_at"] = datetime(now.year, now.month, 1, tzinfo=timezone.utc).isoformat()
+        return next_item
+
+    def check_monthly_usage_available(self, key_id: str) -> tuple[bool, dict[str, object] | None]:
         normalized_id = self._clean(key_id)
         if not normalized_id:
             return False, None
@@ -655,24 +682,44 @@ class AuthService:
                     continue
                 if item.get("role") != "user":
                     return True, self._public_item(item)
-                next_item = dict(item)
                 now = datetime.now(timezone.utc)
-                # monthly reset check
-                reset_at = _parse_iso(next_item.get("monthly_reset_at"))
-                if reset_at is None or reset_at.year != now.year or reset_at.month != now.month:
-                    next_item["monthly_usage"] = 0
-                    next_item["monthly_reset_at"] = datetime(now.year, now.month, 1, tzinfo=timezone.utc).isoformat()
+                next_item = self._prepare_monthly_usage_item_locked(item, now=now)
                 monthly_limit = int(next_item.get("monthly_limit") or 0)
                 monthly_usage = int(next_item.get("monthly_usage") or 0)
-                if monthly_limit > 0 and monthly_usage >= monthly_limit:
+                if next_item != item:
                     self._items[index] = next_item
                     self._save()
-                    return False, self._public_item(next_item, remaining_days=self._compute_remaining_days(next_item, now=now))
+                return monthly_limit <= 0 or monthly_usage < monthly_limit, self._public_item(
+                    next_item,
+                    remaining_days=self._compute_remaining_days(next_item, now=now),
+                )
+        return False, None
+
+    def increment_monthly_usage(self, key_id: str, count: int = 1) -> dict[str, object] | None:
+        normalized_id = self._clean(key_id)
+        if not normalized_id:
+            return None
+        with self._lock:
+            self._reload_locked()
+            for index, item in enumerate(self._items):
+                if item.get("id") != normalized_id:
+                    continue
+                if item.get("role") != "user":
+                    return self._public_item(item)
+                now = datetime.now(timezone.utc)
+                next_item = self._prepare_monthly_usage_item_locked(item, now=now)
+                monthly_usage = int(next_item.get("monthly_usage") or 0)
                 next_item["monthly_usage"] = monthly_usage + count
                 self._items[index] = next_item
                 self._save()
-                return True, self._public_item(next_item, remaining_days=self._compute_remaining_days(next_item, now=now))
-        return False, None
+                return self._public_item(next_item, remaining_days=self._compute_remaining_days(next_item, now=now))
+        return None
+
+    def check_and_increment_monthly_usage(self, key_id: str, count: int = 1) -> tuple[bool, dict[str, object] | None]:
+        ok, item = self.check_monthly_usage_available(key_id)
+        if not ok:
+            return False, item
+        return True, self.increment_monthly_usage(key_id, count)
 
     def get_user_profile(self, key_id: str) -> dict[str, object] | None:
         normalized_id = self._clean(key_id)
@@ -700,6 +747,7 @@ class AuthService:
         if not normalized_id:
             return 0
         with self._lock:
+            self._reload_locked()
             return sum(
                 1 for item in self._items
                 if item.get("role") == "user"
@@ -712,6 +760,7 @@ class AuthService:
         if not normalized_id:
             return {"total": 0, "active": 0, "trial": 0, "paid": 0}
         with self._lock:
+            self._reload_locked()
             now = datetime.now(timezone.utc)
             total = 0
             active = 0

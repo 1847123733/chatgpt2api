@@ -40,20 +40,44 @@ def _get_tier_limit(tier_name: str) -> int:
     return 0
 
 
+def _customer_stats_payload(stats: dict[str, int], max_trial_keys: object = 20, **extra: object) -> dict[str, object]:
+    try:
+        max_trial = max(0, int(max_trial_keys or 0))
+    except (TypeError, ValueError):
+        max_trial = 20
+    trial = int(stats.get("trial", 0))
+    return {
+        "total_customers": int(stats.get("total", 0)),
+        "active_customers": int(stats.get("active", 0)),
+        "trial_customers": trial,
+        "paid_customers": int(stats.get("paid", 0)),
+        "max_trial_keys": max_trial,
+        "trial_quota_remaining": max(0, max_trial - trial),
+        **extra,
+    }
+
+
 def create_router() -> APIRouter:
     router = APIRouter()
 
     # ─── Reseller customer management ───
 
     @router.get("/api/reseller/customers")
-    def list_customers(authorization: str | None = Header(None), session_id: str | None = Header(None)):
+    def list_customers(
+        authorization: str | None = Header(None),
+        session_id: str | None = Header(default=None, alias="x-session-id"),
+    ):
         identity = require_reseller(authorization, session_id)
         owner_id = None if identity.get("role") == "admin" else str(identity.get("id"))
         items = auth_service.list_keys(role="user", owner_id=owner_id)
         return {"items": items}
 
     @router.post("/api/reseller/customers")
-    def create_customer(body: ResellerCustomerCreateRequest, authorization: str | None = Header(None), session_id: str | None = Header(None)):
+    def create_customer(
+        body: ResellerCustomerCreateRequest,
+        authorization: str | None = Header(None),
+        session_id: str | None = Header(default=None, alias="x-session-id"),
+    ):
         identity = require_reseller(authorization, session_id)
         reseller_id = str(identity.get("id"))
         is_trial = body.is_trial
@@ -83,7 +107,12 @@ def create_router() -> APIRouter:
         return {"item": public_item, "key": raw_key}
 
     @router.post("/api/reseller/customers/{customer_id}")
-    def update_customer(customer_id: str, body: ResellerCustomerUpdateRequest, authorization: str | None = Header(None), session_id: str | None = Header(None)):
+    def update_customer(
+        customer_id: str,
+        body: ResellerCustomerUpdateRequest,
+        authorization: str | None = Header(None),
+        session_id: str | None = Header(default=None, alias="x-session-id"),
+    ):
         identity = require_reseller(authorization, session_id)
         updates = {}
         for field in ("name", "enabled", "key", "valid_days", "renew_days", "max_sessions"):
@@ -111,7 +140,11 @@ def create_router() -> APIRouter:
         return {"item": result}
 
     @router.delete("/api/reseller/customers/{customer_id}")
-    def delete_customer(customer_id: str, authorization: str | None = Header(None), session_id: str | None = Header(None)):
+    def delete_customer(
+        customer_id: str,
+        authorization: str | None = Header(None),
+        session_id: str | None = Header(default=None, alias="x-session-id"),
+    ):
         identity = require_reseller(authorization, session_id)
         if identity.get("role") != "admin":
             # verify ownership before delete
@@ -123,8 +156,31 @@ def create_router() -> APIRouter:
             raise HTTPException(status_code=404, detail={"error": "客户不存在"})
         return {"ok": True}
 
+    @router.post("/api/reseller/customers/{customer_id}/clear-sessions")
+    def clear_customer_sessions(
+        customer_id: str,
+        authorization: str | None = Header(None),
+        session_id: str | None = Header(default=None, alias="x-session-id"),
+    ):
+        identity = require_reseller(authorization, session_id)
+        items = auth_service.list_keys(role="user")
+        customer = next((i for i in items if i.get("id") == customer_id), None)
+        if customer is None:
+            raise HTTPException(status_code=404, detail={"error": "客户不存在"})
+        if identity.get("role") != "admin" and customer.get("owner_id") != str(identity.get("id")):
+            raise HTTPException(status_code=403, detail={"error": "无权操作此客户"})
+        result = auth_service.clear_key_sessions(customer_id, role="user")
+        if result is None:
+            raise HTTPException(status_code=404, detail={"error": "客户不存在"})
+        return {"item": result}
+
     @router.post("/api/reseller/customers/{customer_id}/convert-trial")
-    def convert_trial(customer_id: str, body: ConvertTrialRequest, authorization: str | None = Header(None), session_id: str | None = Header(None)):
+    def convert_trial(
+        customer_id: str,
+        body: ConvertTrialRequest,
+        authorization: str | None = Header(None),
+        session_id: str | None = Header(default=None, alias="x-session-id"),
+    ):
         identity = require_reseller(authorization, session_id)
         items = auth_service.list_keys(role="user")
         customer = next((i for i in items if i.get("id") == customer_id), None)
@@ -147,7 +203,10 @@ def create_router() -> APIRouter:
         return {"item": result}
 
     @router.get("/api/reseller/customers/usage")
-    def customer_usage(authorization: str | None = Header(None), session_id: str | None = Header(None)):
+    def customer_usage(
+        authorization: str | None = Header(None),
+        session_id: str | None = Header(default=None, alias="x-session-id"),
+    ):
         identity = require_reseller(authorization, session_id)
         owner_id = None if identity.get("role") == "admin" else str(identity.get("id"))
         items = auth_service.list_keys(role="user", owner_id=owner_id)
@@ -155,7 +214,10 @@ def create_router() -> APIRouter:
         return usage
 
     @router.get("/api/reseller/stats")
-    def reseller_stats(authorization: str | None = Header(None), session_id: str | None = Header(None)):
+    def reseller_stats(
+        authorization: str | None = Header(None),
+        session_id: str | None = Header(default=None, alias="x-session-id"),
+    ):
         identity = require_reseller(authorization, session_id)
         reseller_id = str(identity.get("id"))
         if identity.get("role") == "admin":
@@ -164,23 +226,33 @@ def create_router() -> APIRouter:
             all_stats = []
             for r in resellers:
                 stats = auth_service.count_customers(str(r.get("id")))
-                stats["reseller_id"] = r.get("id")
-                stats["reseller_name"] = r.get("name")
-                stats["max_trial_keys"] = r.get("max_trial_keys", 20)
-                stats["cost_per_user"] = r.get("cost_per_user", 0)
-                all_stats.append(stats)
+                all_stats.append(_customer_stats_payload(
+                    stats,
+                    r.get("max_trial_keys", 20),
+                    reseller_id=r.get("id"),
+                    reseller_name=r.get("name"),
+                    cost_per_user=r.get("cost_per_user", 0),
+                ))
             return {"role": "admin", "resellers": all_stats}
         stats = auth_service.count_customers(reseller_id)
         reseller_items = auth_service.list_keys(role="reseller")
         reseller_item = next((r for r in reseller_items if r.get("id") == reseller_id), None)
-        stats["max_trial_keys"] = (reseller_item or {}).get("max_trial_keys", 20)
-        stats["cost_per_user"] = (reseller_item or {}).get("cost_per_user", 0)
-        return {"role": "reseller", **stats}
+        return {
+            "role": "reseller",
+            **_customer_stats_payload(
+                stats,
+                (reseller_item or {}).get("max_trial_keys", 20),
+                cost_per_user=(reseller_item or {}).get("cost_per_user", 0),
+            ),
+        }
 
     # ─── User self-service ───
 
     @router.get("/api/user/profile")
-    def user_profile(authorization: str | None = Header(None), session_id: str | None = Header(None)):
+    def user_profile(
+        authorization: str | None = Header(None),
+        session_id: str | None = Header(default=None, alias="x-session-id"),
+    ):
         identity = require_identity(authorization, session_id)
         if identity.get("role") != "user":
             raise HTTPException(status_code=403, detail={"error": "仅限用户访问"})
