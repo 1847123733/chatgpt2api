@@ -147,10 +147,7 @@ def create_router() -> APIRouter:
     ):
         identity = require_reseller(authorization, session_id)
         if identity.get("role") != "admin":
-            # verify ownership before delete
-            items = auth_service.list_keys(role="user", owner_id=str(identity.get("id")))
-            if not any(i.get("id") == customer_id for i in items):
-                raise HTTPException(status_code=404, detail={"error": "客户不存在"})
+            raise HTTPException(status_code=403, detail={"error": "分销商不能删除客户，请联系管理员处理"})
         deleted = auth_service.delete_key(customer_id, role="user")
         if not deleted:
             raise HTTPException(status_code=404, detail={"error": "客户不存在"})

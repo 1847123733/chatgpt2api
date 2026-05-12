@@ -298,6 +298,27 @@ class AuthServiceTests(unittest.TestCase):
             self.assertIsNotNone(checked)
             self.assertEqual(checked["monthly_usage"], 1)
 
+    def test_monthly_usage_checks_requested_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AuthService(JSONStorageBackend(Path(tmp_dir) / "accounts.json", Path(tmp_dir) / "auth_keys.json"))
+            user, _ = service.create_key(role="user", name="Trial A", monthly_limit=3)
+
+            ok, checked = service.check_monthly_usage_available(str(user["id"]), 4)
+
+            self.assertFalse(ok)
+            self.assertIsNotNone(checked)
+            self.assertEqual(checked["monthly_usage"], 0)
+
+            ok, incremented = service.check_and_increment_monthly_usage(str(user["id"]), 3)
+            self.assertTrue(ok)
+            self.assertIsNotNone(incremented)
+            self.assertEqual(incremented["monthly_usage"], 3)
+
+            ok, checked = service.check_and_increment_monthly_usage(str(user["id"]), 1)
+            self.assertFalse(ok)
+            self.assertIsNotNone(checked)
+            self.assertEqual(checked["monthly_usage"], 3)
+
 
 class ResellerApiAuthTests(unittest.TestCase):
     def _with_reseller_client(self):

@@ -23,6 +23,7 @@ import {
   createImageGenerationTask,
   fetchAccounts,
   fetchImageTasks,
+  fetchUserProfile,
   type Account,
   type ImageTask,
 } from "@/lib/api";
@@ -358,6 +359,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [availableQuota, setAvailableQuota] = useState("加载中...");
+  const [userRemainingQuota, setUserRemainingQuota] = useState<number | null>(null);
   const [lightboxImages, setLightboxImages] = useState<ImageLightboxItem[]>([]);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
@@ -450,11 +452,27 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
 
   const loadQuota = useCallback(async () => {
     if (!isAdmin) {
-      setAvailableQuota("--");
+      try {
+        const data = await fetchUserProfile();
+        const limit = Number(data.item.monthly_limit || 0);
+        const usage = Number(data.item.monthly_usage || 0);
+        if (limit <= 0) {
+          setUserRemainingQuota(null);
+          setAvailableQuota("不限");
+          return;
+        }
+        const remaining = Math.max(0, limit - usage);
+        setUserRemainingQuota(remaining);
+        setAvailableQuota(String(remaining));
+      } catch {
+        setUserRemainingQuota(null);
+        setAvailableQuota((prev) => (prev === "加载中..." ? "--" : prev));
+      }
       return;
     }
     try {
       const data = await fetchAccounts();
+      setUserRemainingQuota(null);
       setAvailableQuota(formatAvailableQuota(data.items));
     } catch {
       setAvailableQuota((prev) => (prev === "加载中..." ? "--" : prev));
@@ -1096,6 +1114,10 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       toast.error("请输入提示词");
       return;
     }
+    if (!isAdmin && userRemainingQuota !== null && parsedCount > userRemainingQuota) {
+      toast.error(`剩余额度不足，当前最多还能生成 ${userRemainingQuota} 张`);
+      return;
+    }
 
     const effectiveImageMode: ImageConversationMode = referenceImageFiles.length > 0 ? "edit" : "generate";
 
@@ -1245,7 +1267,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
             imageCount={imageCount}
             imageSize={imageSize}
             availableQuota={availableQuota}
-            showAvailableQuota={isAdmin}
+            showAvailableQuota
             activeTaskCount={activeTaskCount}
             referenceImages={referenceImages}
             textareaRef={textareaRef}

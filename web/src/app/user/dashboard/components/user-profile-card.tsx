@@ -29,6 +29,7 @@ type UserProfile = {
   name?: string | null;
   status?: string | null;
   tier_name?: string | null;
+  owner_id?: string | null;
   remaining_days?: number | null;
   monthly_usage?: number | null;
   monthly_limit?: number | null;
@@ -86,6 +87,7 @@ export function UserProfileCard() {
   const isTrial = profile.status === "trial";
   const isPaid = profile.status === "paid";
   const remainingDays = typeof profile.remaining_days === "number" ? profile.remaining_days : null;
+  const ownerName = profile.owner_name || (profile.owner_id ? "代理已删除" : "未分配");
 
   // Usage display
   let usageCurrent = 0;
@@ -187,12 +189,10 @@ export function UserProfileCard() {
           </div>
 
           {/* Owner */}
-          {profile.owner_name && (
-            <div className="space-y-1">
-              <div className="text-xs font-medium text-stone-500">所属代理</div>
-              <div className="text-sm font-medium text-stone-800">{profile.owner_name}</div>
-            </div>
-          )}
+          <div className="space-y-1">
+            <div className="text-xs font-medium text-stone-500">所属代理</div>
+            <div className="text-sm font-medium text-stone-800">{ownerName}</div>
+          </div>
         </div>
 
         {/* Usage progress */}

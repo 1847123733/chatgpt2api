@@ -22,6 +22,10 @@ TERMINAL_STATUSES = {TASK_STATUS_SUCCESS, TASK_STATUS_ERROR}
 UNFINISHED_STATUSES = {TASK_STATUS_QUEUED, TASK_STATUS_RUNNING}
 
 
+class ImageTaskQuotaError(ValueError):
+    pass
+
+
 def _now_iso() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -190,6 +194,10 @@ class ImageTaskService:
                 if cleaned:
                     self._save_locked()
                 return _public_task(task)
+            if identity.get("role") == "user":
+                ok, _ = auth_service.check_and_increment_monthly_usage(str(identity.get("id")), 1)
+                if not ok:
+                    raise ImageTaskQuotaError("剩余额度不足，无法继续生成图片")
             task = {
                 "id": task_id,
                 "owner_id": owner,
@@ -243,9 +251,9 @@ class ImageTaskService:
                 request_preview=request_text(payload.get("prompt")),
                 urls=_collect_image_urls(data),
             )
-            if identity.get("role") == "user":
-                auth_service.increment_monthly_usage(str(identity.get("id")))
         except Exception as exc:
+            if identity.get("role") == "user":
+                auth_service.increment_monthly_usage(str(identity.get("id")), -1)
             error_message = str(exc) or "image task failed"
             self._update_task(key, status=TASK_STATUS_ERROR, error=error_message, data=[])
             self._log_call(

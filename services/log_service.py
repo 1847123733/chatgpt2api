@@ -276,6 +276,7 @@ class LoggedCall:
     started: float = field(default_factory=time.time)
     request_text: str = ""
     on_success: Callable[[], None] | None = None
+    on_failure: Callable[[], None] | None = None
 
     async def run(self, handler, *args, sse: str = "openai"):
         from services.protocol.conversation import ImageGenerationError
@@ -284,12 +285,15 @@ class LoggedCall:
             result = await run_in_threadpool(handler, *args)
         except ImageGenerationError as exc:
             self.log("调用失败", status="failed", error=str(exc))
+            self._mark_failure()
             return _image_error_response(exc)
         except HTTPException as exc:
             self.log("调用失败", status="failed", error=str(exc.detail))
+            self._mark_failure()
             raise
         except Exception as exc:
             self.log("调用失败", status="failed", error=str(exc))
+            self._mark_failure()
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
 
         if isinstance(result, dict):
@@ -302,12 +306,15 @@ class LoggedCall:
             has_first, first = await run_in_threadpool(_next_item, result)
         except ImageGenerationError as exc:
             self.log("调用失败", status="failed", error=str(exc))
+            self._mark_failure()
             return _image_error_response(exc)
         except HTTPException as exc:
             self.log("调用失败", status="failed", error=str(exc.detail))
+            self._mark_failure()
             raise
         except Exception as exc:
             self.log("调用失败", status="failed", error=str(exc))
+            self._mark_failure()
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
         if not has_first:
             self.log("流式调用结束")
@@ -323,6 +330,14 @@ class LoggedCall:
         except Exception:
             pass
 
+    def _mark_failure(self) -> None:
+        if self.on_failure is None:
+            return
+        try:
+            self.on_failure()
+        except Exception:
+            pass
+
     def stream(self, items):
         urls: list[str] = []
         failed = False
@@ -333,6 +348,7 @@ class LoggedCall:
         except Exception as exc:
             failed = True
             self.log("流式调用失败", status="failed", error=str(exc), urls=urls)
+            self._mark_failure()
             raise
         finally:
             if not failed:

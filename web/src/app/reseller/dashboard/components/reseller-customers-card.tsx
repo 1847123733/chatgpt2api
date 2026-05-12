@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Ban, CheckCircle2, Copy, KeyRound, LoaderCircle, LogOut, Pencil, Plus, Trash2, UserPlus } from "lucide-react";
+import { Ban, CheckCircle2, Copy, KeyRound, LoaderCircle, LogOut, Pencil, Plus, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -21,7 +21,6 @@ import {
   convertTrialToPaid,
   createResellerCustomer,
   clearResellerCustomerSessions,
-  deleteResellerCustomer,
   fetchResellerCustomers,
   updateResellerCustomer,
   type ResellerCustomer,
@@ -84,9 +83,6 @@ export function ResellerCustomersCard() {
   // Renew dialog
   const [renewingItem, setRenewingItem] = useState<ResellerCustomer | null>(null);
   const [renewDays, setRenewDays] = useState("30");
-
-  // Delete dialog
-  const [deletingItem, setDeletingItem] = useState<ResellerCustomer | null>(null);
 
   // Convert dialog
   const [convertingItem, setConvertingItem] = useState<ResellerCustomer | null>(null);
@@ -201,23 +197,6 @@ export function ResellerCustomersCard() {
       toast.success("已续期");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "续期失败");
-    } finally {
-      setItemPending(item.id, false);
-    }
-  };
-
-  const handleDelete = async () => {
-    if (!deletingItem) return;
-    const item = deletingItem;
-    setItemPending(item.id, true);
-    try {
-      await deleteResellerCustomer(item.id);
-      setItems((prev) => prev.filter((i) => i.id !== item.id));
-      setDeletingItem(null);
-      notifyCustomersChanged();
-      toast.success("客户已删除");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "删除客户失败");
     } finally {
       setItemPending(item.id, false);
     }
@@ -369,10 +348,6 @@ export function ResellerCustomersCard() {
                         {isPending ? <LoaderCircle className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
                         续期
                       </Button>
-                      <Button type="button" variant="outline" className="h-9 rounded-xl border-rose-200 bg-white px-4 text-rose-600 hover:bg-rose-50 hover:text-rose-700" onClick={() => setDeletingItem(item)} disabled={isPending}>
-                        {isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
-                        删除
-                      </Button>
                     </div>
                   </div>
                 );
@@ -493,23 +468,6 @@ export function ResellerCustomersCard() {
             <Button type="button" className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800" onClick={() => void handleRenew()} disabled={renewingItem ? pendingIds.has(renewingItem.id) : false}>
               {renewingItem && pendingIds.has(renewingItem.id) ? <LoaderCircle className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
               续期
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Delete dialog */}
-      <Dialog open={Boolean(deletingItem)} onOpenChange={(open) => { if (!open) setDeletingItem(null); }}>
-        <DialogContent className="rounded-2xl p-6">
-          <DialogHeader className="gap-2">
-            <DialogTitle>删除客户</DialogTitle>
-            <DialogDescription className="text-sm leading-6">确认删除客户「{deletingItem?.name}」吗？删除后该客户密钥将无法继续使用。</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button type="button" variant="secondary" className="h-10 rounded-xl bg-stone-100 px-5 text-stone-700 hover:bg-stone-200" onClick={() => setDeletingItem(null)} disabled={deletingItem ? pendingIds.has(deletingItem.id) : false}>取消</Button>
-            <Button type="button" className="h-10 rounded-xl bg-rose-600 px-5 text-white hover:bg-rose-700" onClick={() => void handleDelete()} disabled={deletingItem ? pendingIds.has(deletingItem.id) : false}>
-              {deletingItem && pendingIds.has(deletingItem.id) ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
-              删除
             </Button>
           </DialogFooter>
         </DialogContent>

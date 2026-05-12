@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from api.support import require_identity, resolve_image_base_url
 from services.auth_service import auth_service
 from services.content_filter import check_request
-from services.image_task_service import image_task_service
+from services.image_task_service import ImageTaskQuotaError, image_task_service
 from services.log_service import LoggedCall
 
 
@@ -65,6 +65,8 @@ def create_router() -> APIRouter:
                 size=body.size,
                 base_url=resolve_image_base_url(request),
             )
+        except ImageTaskQuotaError as exc:
+            raise HTTPException(status_code=429, detail={"error": str(exc), "code": "monthly_limit_exceeded"}) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
 
@@ -106,6 +108,8 @@ def create_router() -> APIRouter:
                 base_url=resolve_image_base_url(request),
                 images=images,
             )
+        except ImageTaskQuotaError as exc:
+            raise HTTPException(status_code=429, detail={"error": str(exc), "code": "monthly_limit_exceeded"}) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
 
