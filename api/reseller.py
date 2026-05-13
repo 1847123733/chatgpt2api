@@ -6,8 +6,12 @@ from pydantic import BaseModel
 from services.auth_service import auth_service
 from services.config import config
 from services.log_service import log_service
+from services.reseller_billing_service import record_customer_billing_event
 
 from api.support import require_admin, require_identity, require_reseller
+
+UNLIMITED_TIER = "unlimited"
+FIXED_TIER_VALID_DAYS = 30
 
 
 class ResellerCustomerCreateRequest(BaseModel):
@@ -38,6 +42,20 @@ def _get_tier_limit(tier_name: str) -> int:
         if t.get("name") == tier_name:
             return int(t.get("limit", 0))
     return 0
+
+
+def _customer_valid_days(tier_name: str, requested_days: int) -> int:
+    if tier_name == UNLIMITED_TIER:
+        return requested_days
+    return FIXED_TIER_VALID_DAYS
+
+
+def _billing_category(is_trial: bool, tier_name: str) -> str:
+    if is_trial:
+        return "trial"
+    if tier_name == UNLIMITED_TIER:
+        return "unlimited"
+    return "package"
 
 
 def _customer_stats_payload(stats: dict[str, int], max_trial_keys: object = 20, **extra: object) -> dict[str, object]:
@@ -90,7 +108,7 @@ def create_router() -> APIRouter:
                 raise HTTPException(status_code=400, detail={"error": f"试用名额已满（{current_trial}/{max_trial}）"})
         tier_name = body.tier if not is_trial else ""
         monthly_limit = 10 if is_trial else _get_tier_limit(tier_name)
-        valid_days = body.valid_days if not is_trial else 1
+        valid_days = 1 if is_trial else _customer_valid_days(tier_name, body.valid_days)
         try:
             public_item, raw_key = auth_service.create_key(
                 role="user",
@@ -104,6 +122,13 @@ def create_router() -> APIRouter:
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        record_customer_billing_event(
+            reseller_id=reseller_id,
+            customer=public_item,
+            category=_billing_category(is_trial, tier_name),
+            action="create",
+            days=valid_days,
+        )
         return {"item": public_item, "key": raw_key}
 
     @router.post("/api/reseller/customers/{customer_id}")
@@ -124,19 +149,29 @@ def create_router() -> APIRouter:
             updates["monthly_limit"] = _get_tier_limit(body.tier)
         if not updates:
             raise HTTPException(status_code=400, detail={"error": "没有需要更新的字段"})
+        items = auth_service.list_keys(role="user")
+        customer = next((i for i in items if i.get("id") == customer_id), None)
+        if customer is None:
+            raise HTTPException(status_code=404, detail={"error": "客户不存在"})
         # reseller can only update own customers
         owner_id_filter = str(identity.get("id")) if identity.get("role") != "admin" else None
-        # verify ownership before update
-        if owner_id_filter:
-            items = auth_service.list_keys(role="user", owner_id=owner_id_filter)
-            if not any(i.get("id") == customer_id for i in items):
-                raise HTTPException(status_code=404, detail={"error": "客户不存在"})
+        if owner_id_filter and customer.get("owner_id") != owner_id_filter:
+            raise HTTPException(status_code=404, detail={"error": "客户不存在"})
         try:
             result = auth_service.update_key(customer_id, updates, role="user")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         if result is None:
             raise HTTPException(status_code=404, detail={"error": "客户不存在"})
+        if body.renew_days is not None and not bool(customer.get("is_trial")):
+            tier_name = str(customer.get("tier") or result.get("tier") or "").strip()
+            record_customer_billing_event(
+                reseller_id=str(customer.get("owner_id") or result.get("owner_id") or ""),
+                customer=result,
+                category=_billing_category(False, tier_name),
+                action="renew",
+                days=body.renew_days,
+            )
         return {"item": result}
 
     @router.delete("/api/reseller/customers/{customer_id}")
@@ -188,15 +223,23 @@ def create_router() -> APIRouter:
         if not customer.get("is_trial"):
             raise HTTPException(status_code=400, detail={"error": "该客户不是试用账号"})
         monthly_limit = _get_tier_limit(body.tier)
+        valid_days = _customer_valid_days(body.tier, body.valid_days)
         try:
             result = auth_service.update_key(customer_id, {
                 "is_trial": False,
                 "tier": body.tier,
                 "monthly_limit": monthly_limit,
-                "valid_days": body.valid_days,
+                "valid_days": valid_days,
             }, role="user")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        record_customer_billing_event(
+            reseller_id=str(customer.get("owner_id") or result.get("owner_id") or ""),
+            customer=result,
+            category=_billing_category(False, body.tier),
+            action="convert",
+            days=valid_days,
+        )
         return {"item": result}
 
     @router.get("/api/reseller/customers/usage")

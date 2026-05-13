@@ -1,0 +1,15 @@
+
+> next-starter@0.1.0 dev
+> next dev --webpack -H 0.0.0.0 -p 3000
+
+▲ Next.js 16.2.3 (webpack)
+- Local:         http://localhost:3000
+- Network:       http://0.0.0.0:3000
+✓ Ready in 610ms
+
+ GET / 200 in 3.3s (next.js: 3.1s, application-code: 261ms)
+ POST /auth/login/ 404 in 2.2s (next.js: 1578ms, application-code: 639ms)
+ HEAD / 200 in 1196ms (next.js: 942ms, application-code: 254ms)
+ HEAD / 200 in 35ms (next.js: 3ms, application-code: 32ms)
+ GET / 200 in 35ms (next.js: 2ms, application-code: 33ms)
+ GET / 200 in 137ms (next.js: 13ms, application-code: 125ms)

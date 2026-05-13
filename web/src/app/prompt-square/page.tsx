@@ -15,6 +15,7 @@ import {
   createUserPromptSquareItem,
   deleteUserPromptSquareItem,
   fetchPromptSquare,
+  translatePromptSquareDescriptions,
   fetchUserPromptSquare,
   toggleUserPromptSquareLike,
   type PromptSquareItem,
@@ -29,6 +30,7 @@ const allFilter = "全部";
 const featuredFilter = "Featured";
 const favoritesFilter = "我的收藏";
 const favoritesStorageKey = "chatgpt2api.promptSquare.favorites";
+const githubDescriptionTranslationCacheKey = "chatgpt2api.promptSquare.githubDescriptionZh";
 const userPageSize = 24;
 
 type PromptSource = "github" | "user";
@@ -133,6 +135,25 @@ function writeFavoriteIds(ids: string[]) {
   }
 }
 
+function readGithubDescriptionTranslations() {
+  if (typeof window === "undefined") return {} as Record<string, string>;
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(githubDescriptionTranslationCacheKey) || "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[0] === "string" && typeof entry[1] === "string"));
+  } catch {
+    return {};
+  }
+}
+
+function writeGithubDescriptionTranslations(value: Record<string, string>) {
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(githubDescriptionTranslationCacheKey, JSON.stringify(value));
+  }
+}
+
 function getItemCategories(item: PromptSquareItem) {
   return (Array.isArray(item.categories) ? item.categories : []).map((category) => ({
     ...category,
@@ -190,8 +211,13 @@ export default function PromptSquarePage() {
   const router = useRouter();
   const { isCheckingAuth, session } = useAuthGuard();
   const imageInputRef = useRef<HTMLInputElement | null>(null);
-  const [source, setSource] = useState<PromptSource>("github");
+  const cardRefs = useRef<Record<string, HTMLElement | null>>({});
+  const queuedTranslationIdsRef = useRef<Set<string>>(new Set());
+  const pendingTranslationIdsRef = useRef<Set<string>>(new Set());
+  const translationFlushTimerRef = useRef<number | null>(null);
+  const [source, setSource] = useState<PromptSource>("user");
   const [items, setItems] = useState<PromptSquareItem[]>([]);
+  const [githubDescriptionTranslations, setGithubDescriptionTranslations] = useState<Record<string, string>>({});
   const [repoUrl, setRepoUrl] = useState("");
   const [fetchedAt, setFetchedAt] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -218,6 +244,14 @@ export default function PromptSquarePage() {
   useEffect(() => {
     setFavoriteIds(readFavoriteIds());
   }, []);
+
+  useEffect(() => {
+    setGithubDescriptionTranslations(readGithubDescriptionTranslations());
+  }, []);
+
+  useEffect(() => {
+    writeGithubDescriptionTranslations(githubDescriptionTranslations);
+  }, [githubDescriptionTranslations]);
 
   useEffect(() => {
     setActiveFilter(allFilter);
@@ -274,6 +308,80 @@ export default function PromptSquarePage() {
   const categoryGroups = useMemo(() => getCategoryGroupEntries(items), [items]);
   const favoriteSet = useMemo(() => new Set(favoriteIds), [favoriteIds]);
 
+  const getDescriptionText = (item: PromptSquareItem) => {
+    if (source !== "github") {
+      return item.description || item.prompt_preview;
+    }
+    return githubDescriptionTranslations[item.id] || item.description || item.prompt_preview;
+  };
+
+  const flushGithubDescriptionTranslations = async () => {
+    const ids = Array.from(queuedTranslationIdsRef.current).filter((id) => !pendingTranslationIdsRef.current.has(id));
+    queuedTranslationIdsRef.current.clear();
+    if (!ids.length) return;
+
+    const payload = ids
+      .map((id) => {
+        const item = items.find((entry) => entry.id === id);
+        const text = String(item?.description || "").trim();
+        if (!text || githubDescriptionTranslations[id]) {
+          return null;
+        }
+        return { id, text };
+      })
+      .filter((entry): entry is { id: string; text: string } => Boolean(entry));
+
+    if (!payload.length) return;
+
+    payload.forEach((entry) => pendingTranslationIdsRef.current.add(entry.id));
+
+    try {
+      const data = await translatePromptSquareDescriptions(payload.map((entry) => entry.text));
+      const translatedByText = new Map<string, string>();
+      for (const item of data.items || []) {
+        const text = String(item?.text || "").trim();
+        const translatedText = String(item?.translated_text || "").trim();
+        if (text && translatedText) {
+          translatedByText.set(text, translatedText);
+        }
+      }
+      if (!translatedByText.size) return;
+
+      setGithubDescriptionTranslations((current) => {
+        const next = { ...current };
+        let changed = false;
+        for (const entry of payload) {
+          const translatedText = translatedByText.get(entry.text);
+          if (translatedText && next[entry.id] !== translatedText) {
+            next[entry.id] = translatedText;
+            changed = true;
+          }
+        }
+        return changed ? next : current;
+      });
+    } catch {
+      // Ignore translation failures and keep the original English description.
+    } finally {
+      payload.forEach((entry) => pendingTranslationIdsRef.current.delete(entry.id));
+    }
+  };
+
+  const queueGithubDescriptionTranslation = (itemId: string) => {
+    if (source !== "github") return;
+    const item = items.find((entry) => entry.id === itemId);
+    if (!item || !String(item.description || "").trim() || githubDescriptionTranslations[itemId] || pendingTranslationIdsRef.current.has(itemId)) {
+      return;
+    }
+    queuedTranslationIdsRef.current.add(itemId);
+    if (translationFlushTimerRef.current !== null) {
+      window.clearTimeout(translationFlushTimerRef.current);
+    }
+    translationFlushTimerRef.current = window.setTimeout(() => {
+      translationFlushTimerRef.current = null;
+      void flushGithubDescriptionTranslations();
+    }, 120);
+  };
+
   const visibleItems = useMemo(() => {
     if (source === "user") return items;
     const keyword = searchText.trim().toLowerCase();
@@ -295,6 +403,50 @@ export default function PromptSquarePage() {
       return haystack.includes(keyword);
     });
   }, [activeCategory, activeFilter, favoriteSet, items, searchText, source]);
+
+  useEffect(() => {
+    if (source !== "github" || !visibleItems.length) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const itemId = entry.target.getAttribute("data-item-id");
+          if (itemId) {
+            queueGithubDescriptionTranslation(itemId);
+          }
+        }
+      },
+      {
+        rootMargin: "220px 0px",
+        threshold: 0.1,
+      },
+    );
+
+    for (const item of visibleItems) {
+      const node = cardRefs.current[item.id];
+      if (node) {
+        observer.observe(node);
+      }
+    }
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [source, visibleItems, githubDescriptionTranslations]);
+
+  useEffect(() => {
+    return () => {
+      if (translationFlushTimerRef.current !== null) {
+        window.clearTimeout(translationFlushTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (source === "github" && detailItem) {
+      queueGithubDescriptionTranslation(detailItem.id);
+    }
+  }, [detailItem, source, githubDescriptionTranslations]);
 
   const lightboxImages = useMemo(
     () =>
@@ -614,7 +766,14 @@ export default function PromptSquarePage() {
           ) : visibleItems.length > 0 ? (
             <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
               {visibleItems.map((item) => (
-                <article key={item.id} className="overflow-hidden rounded-[24px] border border-stone-200/80 bg-white shadow-[0_20px_70px_-45px_rgba(15,23,42,0.45)]">
+                <article
+                  key={item.id}
+                  data-item-id={item.id}
+                  ref={(node) => {
+                    cardRefs.current[item.id] = node;
+                  }}
+                  className="overflow-hidden rounded-[24px] border border-stone-200/80 bg-white shadow-[0_20px_70px_-45px_rgba(15,23,42,0.45)]"
+                >
                   <div className="relative aspect-[4/3] overflow-hidden bg-stone-100">
                     {item.preview_image_url ? (
                       <button
@@ -676,7 +835,7 @@ export default function PromptSquarePage() {
                       </button>
                     </div>
 
-                    <p className="mt-4 line-clamp-3 text-sm leading-6 text-stone-600">{item.description || item.prompt_preview}</p>
+                    <p className="mt-4 line-clamp-3 text-sm leading-6 text-stone-600">{getDescriptionText(item)}</p>
 
                     <div className="mt-4 flex flex-wrap gap-2">
                       {getItemCategories(item).slice(0, 4).map((category) => (
@@ -894,7 +1053,7 @@ export default function PromptSquarePage() {
                   <div className="space-y-5">
                     <div>
                       <div className="text-xs font-semibold tracking-[0.18em] text-stone-400 uppercase">Description</div>
-                      <p className="mt-2 text-sm leading-6 text-stone-600">{detailItem.description || "暂无描述"}</p>
+                      <p className="mt-2 text-sm leading-6 text-stone-600">{getDescriptionText(detailItem) || "暂无描述"}</p>
                     </div>
                     <div>
                       <div className="mb-2 flex items-center justify-between gap-3">

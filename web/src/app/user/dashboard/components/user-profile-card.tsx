@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Clock, LoaderCircle, User } from "lucide-react";
+import { AlertTriangle, Clock, Copy, LoaderCircle, User } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { fetchUserProfile } from "@/lib/api";
 
@@ -37,6 +38,7 @@ type UserProfile = {
   daily_limit?: number | null;
   last_used_at?: string | null;
   owner_name?: string | null;
+  display_key?: string | null;
 };
 
 export function UserProfileCard() {
@@ -88,6 +90,16 @@ export function UserProfileCard() {
   const isPaid = profile.status === "paid";
   const remainingDays = typeof profile.remaining_days === "number" ? profile.remaining_days : null;
   const ownerName = profile.owner_name || (profile.owner_id ? "代理已删除" : "未分配");
+  const displayKey = String(profile.display_key || "").trim();
+
+  const handleCopy = async (value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      toast.success("已复制到剪贴板");
+    } catch {
+      toast.error("复制失败，请手动复制");
+    }
+  };
 
   // Usage display
   let usageCurrent = 0;
@@ -152,6 +164,25 @@ export function UserProfileCard() {
             </span>
           </div>
         )}
+
+        <div className="space-y-2 rounded-xl bg-stone-50 px-4 py-3">
+          <div className="text-xs font-medium text-stone-500">我的密钥</div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <code className={`break-all font-mono text-[12px] ${displayKey ? "text-stone-700" : "text-stone-400"}`}>
+              {displayKey || "原始密钥未保存"}
+            </code>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-8 shrink-0 rounded-lg border-stone-200 bg-white px-3 text-stone-700"
+              onClick={() => void handleCopy(displayKey)}
+              disabled={!displayKey}
+            >
+              <Copy className="size-3.5" />
+              复制
+            </Button>
+          </div>
+        </div>
 
         {/* Info grid */}
         <div className="grid gap-4 sm:grid-cols-2">

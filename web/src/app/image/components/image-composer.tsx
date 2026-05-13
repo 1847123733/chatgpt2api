@@ -48,6 +48,7 @@ export function ImageComposer({
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [isSizeMenuOpen, setIsSizeMenuOpen] = useState(false);
+  const [customSizeInput, setCustomSizeInput] = useState("");
   const [sizeMenuPos, setSizeMenuPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const sizeMenuRef = useRef<HTMLDivElement>(null);
   const sizeMenuBtnRef = useRef<HTMLButtonElement>(null);
@@ -63,7 +64,11 @@ export function ImageComposer({
     { value: "3:4", label: "3:4 (竖版)" },
     { value: "9:16", label: "9:16 (竖版)" },
   ];
-  const imageSizeLabel = imageSizeOptions.find((option) => option.value === imageSize)?.label || "未指定";
+  const imageSizeOption = imageSizeOptions.find((option) => option.value === imageSize);
+  const isCustomImageSize = Boolean(imageSize && !imageSizeOption);
+  const imageSizeLabel = imageSizeOption?.label || imageSize || "未指定";
+  const normalizedCustomSize = customSizeInput.trim().replace(/\s+/g, "");
+  const canApplyCustomSize = /^(\d{2,5})(?:x|X|\*|×)(\d{2,5})$/.test(normalizedCustomSize) || /^\d{1,5}:\d{1,5}$/.test(normalizedCustomSize);
 
   useEffect(() => {
     if (!isSizeMenuOpen) {
@@ -79,6 +84,12 @@ export function ImageComposer({
       window.removeEventListener("mousedown", handlePointerDown);
     };
   }, [isSizeMenuOpen]);
+
+  useEffect(() => {
+    if (isCustomImageSize) {
+      setCustomSizeInput(imageSize);
+    }
+  }, [imageSize, isCustomImageSize]);
 
   const handleTextareaPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
     const imageFiles = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
@@ -221,7 +232,7 @@ export function ImageComposer({
                       onClick={() => {
                         if (!isSizeMenuOpen && sizeMenuBtnRef.current) {
                           const rect = sizeMenuBtnRef.current.getBoundingClientRect();
-                          const menuWidth = Math.min(186, window.innerWidth - 32);
+                          const menuWidth = Math.min(220, window.innerWidth - 32);
                           setSizeMenuPos({ top: rect.top - 8, left: Math.max(16, Math.min(rect.left, window.innerWidth - menuWidth - 16)) });
                         }
                         setIsSizeMenuOpen((open) => !open);
@@ -238,7 +249,7 @@ export function ImageComposer({
                           top: sizeMenuPos.top,
                           left: sizeMenuPos.left,
                           transform: "translateY(-100%)",
-                          width: "min(186px, calc(100vw - 2rem))",
+                          width: "min(220px, calc(100vw - 2rem))",
                         }}
                       >
                         {imageSizeOptions.map((option) => {
@@ -261,6 +272,36 @@ export function ImageComposer({
                             </button>
                           );
                         })}
+                        <div className="mt-1 border-t border-stone-100 px-1 pt-2">
+                          <div className="flex items-center gap-1.5 rounded-2xl bg-stone-50 px-2 py-1.5">
+                            <Input
+                              value={customSizeInput}
+                              onChange={(event) => setCustomSizeInput(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter" && canApplyCustomSize) {
+                                  onImageSizeChange(normalizedCustomSize.replace("*", "x").replace("×", "x"));
+                                  setIsSizeMenuOpen(false);
+                                }
+                              }}
+                              placeholder="1980x980"
+                              className="h-8 min-w-0 border-0 bg-transparent px-1 text-xs font-medium text-stone-800 shadow-none placeholder:text-stone-400 focus-visible:ring-0"
+                            />
+                            <button
+                              type="button"
+                              disabled={!canApplyCustomSize}
+                              className="shrink-0 rounded-xl px-2 py-1 text-xs font-medium text-stone-700 transition hover:bg-white disabled:cursor-not-allowed disabled:text-stone-300"
+                              onClick={() => {
+                                if (!canApplyCustomSize) {
+                                  return;
+                                }
+                                onImageSizeChange(normalizedCustomSize.replace("*", "x").replace("×", "x"));
+                                setIsSizeMenuOpen(false);
+                              }}
+                            >
+                              应用
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     ) : null}
                   </div>

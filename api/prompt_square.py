@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from api.support import require_identity, resolve_image_base_url
 from services.prompt_square_service import prompt_square_service
+from services.translation_service import translation_service
 from services.user_prompt_square_service import user_prompt_square_service
 
 
@@ -15,6 +16,10 @@ class UserPromptSquareRequest(BaseModel):
     preview_image_url: str = ""
     categories: list[str] = Field(default_factory=list)
     language: str = "zh"
+
+
+class PromptSquareTranslateRequest(BaseModel):
+    texts: list[str] = Field(default_factory=list, max_length=24)
 
 
 def create_router() -> APIRouter:
@@ -47,6 +52,18 @@ def create_router() -> APIRouter:
             category=category,
             search=search,
         )
+
+    @router.post("/api/prompt-square/translate")
+    async def translate_prompt_square_descriptions(
+        body: PromptSquareTranslateRequest,
+        authorization: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None, alias="x-session-id"),
+    ):
+        require_identity(authorization, x_session_id)
+        try:
+            return {"items": translation_service.translate_to_zh(body.texts)}
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail={"error": f"翻译服务不可用: {exc}"}) from exc
 
     @router.post("/api/user-prompt-square")
     async def create_user_prompt_square_item(

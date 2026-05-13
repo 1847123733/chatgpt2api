@@ -95,6 +95,7 @@ class AuthService:
             "name": name,
             "role": role,
             "key_hash": key_hash,
+            "display_key": self._clean(raw.get("display_key")) or None,
             "enabled": bool(raw.get("enabled", True)),
             "created_at": created_at,
             "last_used_at": last_used_at,
@@ -216,6 +217,7 @@ class AuthService:
             "remaining_days": remaining_days,
             "max_sessions": item.get("max_sessions") if has_sessions else None,
             "active_sessions": active_session_count if has_sessions else None,
+            "display_key": item.get("display_key"),
         }
         if role == "reseller":
             result["max_trial_keys"] = item.get("max_trial_keys", 20)
@@ -370,6 +372,7 @@ class AuthService:
                 "name": normalized_name,
                 "role": role,
                 "key_hash": key_hash,
+                "display_key": raw_key,
                 "enabled": True,
                 "created_at": _now_iso(),
                 "last_used_at": None,
@@ -429,7 +432,9 @@ class AuthService:
                 if "enabled" in updates and updates.get("enabled") is not None:
                     next_item["enabled"] = bool(updates.get("enabled"))
                 if "key" in updates and updates.get("key") is not None:
-                    next_item["key_hash"] = self._build_key_hash_locked(str(updates.get("key") or ""), exclude_id=normalized_id)
+                    next_key = str(updates.get("key") or "")
+                    next_item["key_hash"] = self._build_key_hash_locked(next_key, exclude_id=normalized_id)
+                    next_item["display_key"] = self._clean(next_key)
                 if "valid_days" in updates and updates.get("valid_days") is not None:
                     try:
                         days = int(updates.get("valid_days"))

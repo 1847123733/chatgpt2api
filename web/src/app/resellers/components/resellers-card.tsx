@@ -272,6 +272,7 @@ export function ResellersCard() {
             <div className="space-y-3">
               {items.map((item) => {
                 const isPending = pendingIds.has(item.id);
+                const displayKey = String(item.display_key || "").trim();
                 return (
                   <div key={item.id} className="flex flex-col gap-3 rounded-xl border border-stone-200 bg-white px-4 py-4 md:flex-row md:items-center md:justify-between">
                     <div className="min-w-0 space-y-2">
@@ -280,6 +281,21 @@ export function ResellersCard() {
                         <Badge variant={item.enabled ? "success" : "secondary"} className="rounded-md">
                           {item.enabled ? "已启用" : "已禁用"}
                         </Badge>
+                      </div>
+                      <div className="flex max-w-3xl flex-col gap-2 rounded-lg bg-stone-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                        <code className={`break-all font-mono text-[12px] ${displayKey ? "text-stone-700" : "text-stone-400"}`}>
+                          {displayKey || "原始密钥未保存"}
+                        </code>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-8 shrink-0 rounded-lg border-stone-200 bg-white px-3 text-stone-700"
+                          onClick={() => void handleCopy(displayKey)}
+                          disabled={!displayKey}
+                        >
+                          <Copy className="size-3.5" />
+                          复制
+                        </Button>
                       </div>
                       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-500">
                         <span>试用额度 {Number(item.trial_customers) || 0} / {Number(item.max_trial_keys) || 0}</span>

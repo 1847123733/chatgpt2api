@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Ban, CheckCircle2, Copy, KeyRound, LoaderCircle, LogOut, Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -61,6 +61,11 @@ export function UserKeysCard() {
   const [editMaxSessions, setEditMaxSessions] = useState("4");
   const [renewingItem, setRenewingItem] = useState<UserKey | null>(null);
   const [renewDays, setRenewDays] = useState("30");
+  const [originFilter, setOriginFilter] = useState<"admin" | "reseller">("admin");
+
+  const adminItems = useMemo(() => items.filter((item) => !item.owner_id), [items]);
+  const resellerItems = useMemo(() => items.filter((item) => Boolean(item.owner_id)), [items]);
+  const visibleItems = originFilter === "admin" ? adminItems : resellerItems;
 
   const load = async () => {
     setIsLoading(true);
@@ -260,19 +265,42 @@ export function UserKeysCard() {
             </div>
           ) : null}
 
+          <div className="inline-flex w-full rounded-xl bg-stone-100 p-1 sm:w-auto">
+            {[
+              { value: "admin", label: "管理员创建", count: adminItems.length },
+              { value: "reseller", label: "代理商创建", count: resellerItems.length },
+            ].map((option) => {
+              const active = originFilter === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium transition sm:flex-none ${
+                    active ? "bg-white text-stone-900 shadow-sm" : "text-stone-500 hover:text-stone-800"
+                  }`}
+                  onClick={() => setOriginFilter(option.value as "admin" | "reseller")}
+                >
+                  {option.label}
+                  <span className={active ? "text-stone-500" : "text-stone-400"}>{option.count}</span>
+                </button>
+              );
+            })}
+          </div>
+
           {isLoading ? (
             <div className="flex items-center justify-center py-10">
               <LoaderCircle className="size-5 animate-spin text-stone-400" />
             </div>
-          ) : items.length === 0 ? (
+          ) : visibleItems.length === 0 ? (
             <div className="rounded-xl bg-stone-50 px-6 py-10 text-center text-sm text-stone-500">
-              暂无普通用户密钥。点击右上角按钮后即可创建并分发给其他人。
+              {originFilter === "admin" ? "暂无管理员创建的用户密钥。" : "暂无代理商创建的用户密钥。"}
             </div>
           ) : (
             <div className="space-y-3">
-              {items.map((item) => {
+              {visibleItems.map((item) => {
                 const isPending = pendingIds.has(item.id);
                 const activeSessions = Math.max(0, Number(item.active_sessions) || 0);
+                const displayKey = String(item.display_key || "").trim();
                 return (
                   <div key={item.id} className="flex flex-col gap-3 rounded-xl border border-stone-200 bg-white px-4 py-4 md:flex-row md:items-center md:justify-between">
                     <div className="min-w-0 space-y-2">
@@ -281,6 +309,30 @@ export function UserKeysCard() {
                         <Badge variant={item.enabled ? "success" : "secondary"} className="rounded-md">
                           {item.enabled ? "已启用" : "已禁用"}
                         </Badge>
+                        {item.owner_id ? (
+                          <Badge variant="info" className="rounded-md">
+                            {item.owner_name || "代理已删除"}
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="rounded-md">
+                            管理员
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="flex max-w-3xl flex-col gap-2 rounded-lg bg-stone-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                        <code className={`break-all font-mono text-[12px] ${displayKey ? "text-stone-700" : "text-stone-400"}`}>
+                          {displayKey || "原始密钥未保存"}
+                        </code>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-8 shrink-0 rounded-lg border-stone-200 bg-white px-3 text-stone-700"
+                          onClick={() => void handleCopy(displayKey)}
+                          disabled={!displayKey}
+                        >
+                          <Copy className="size-3.5" />
+                          复制
+                        </Button>
                       </div>
                       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-500">
                         <span>创建时间 {formatDateTime(item.created_at)}</span>

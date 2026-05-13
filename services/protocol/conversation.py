@@ -6,6 +6,7 @@ import json
 import re
 import time
 from dataclasses import dataclass, field
+from math import gcd
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
@@ -139,11 +140,23 @@ def assistant_history_messages(messages: list[dict[str, Any]]) -> list[str]:
     return [str(item.get("content") or "") for item in messages if item.get("role") == "assistant" and item.get("content")]
 
 
+def _image_size_hint(size: str) -> str:
+    value = size.strip()
+    dimensions_match = re.fullmatch(r"(\d{2,5})\s*(?:x|X|\*|×)\s*(\d{2,5})", value)
+    if dimensions_match:
+        width = int(dimensions_match.group(1))
+        height = int(dimensions_match.group(2))
+        divisor = gcd(width, height)
+        ratio = f"{width // divisor}:{height // divisor}"
+        return f"输出图片宽高比接近 {ratio}，目标画布尺寸为 {width}x{height} 像素。"
+    return f"输出图片，宽高比为 {value}。"
+
+
 def build_image_prompt(prompt: str, size: str | None) -> str:
     if not size:
         return prompt
     if size not in {"1:1", "16:9", "9:16", "4:3", "3:4"}:
-        return f"{prompt.strip()}\n\n输出图片，宽高比为 {size}。"
+        return f"{prompt.strip()}\n\n{_image_size_hint(size)}"
     hint = {
         "1:1": "输出为 1:1 正方形构图，主体居中，适合正方形画幅。",
         "16:9": "输出为 16:9 横屏构图，适合宽画幅展示。",

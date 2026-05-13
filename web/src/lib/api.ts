@@ -241,12 +241,15 @@ export type UserKey = {
   name: string;
   role: "user";
   enabled: boolean;
+  display_key?: string | null;
   created_at: string | null;
   last_used_at: string | null;
   expires_at?: string | null;
   remaining_days?: number | null;
   max_sessions?: number | null;
   active_sessions?: number | null;
+  owner_id?: string | null;
+  owner_name?: string | null;
 };
 
 export type UserKeyUsageLog = {
@@ -364,6 +367,17 @@ export async function fetchPromptSquare(limit = 120, refresh = false) {
     limit: number;
     items: PromptSquareItem[];
   }>(`/api/prompt-square?${params.toString()}`);
+}
+
+export async function translatePromptSquareDescriptions(texts: string[]) {
+  return httpRequest<{
+    items: Array<{ text: string; translated_text: string }>;
+  }>("/api/prompt-square/translate", {
+    method: "POST",
+    body: {
+      texts,
+    },
+  });
 }
 
 export async function fetchUserPromptSquare(params: { page?: number; pageSize?: number; category?: string; search?: string } = {}) {
@@ -708,6 +722,7 @@ export type ResellerKey = {
   name: string;
   role: "reseller";
   enabled: boolean;
+  display_key?: string | null;
   created_at: string | null;
   last_used_at: string | null;
   expires_at?: string | null;
@@ -736,10 +751,55 @@ export type Settlement = {
   reseller_id: string;
   period: string;
   customer_count: number;
+  event_count?: number;
   amount: number;
   status: "paid" | "unpaid";
   settled_at: string;
   notes: string;
+  summary?: SettlementSummary;
+  items?: SettlementPreviewItem[];
+  trial_unit_price?: number;
+  unlimited_daily_price?: number;
+};
+
+export type SettlementCategory = "package" | "trial" | "unlimited";
+
+export type SettlementSummaryItem = {
+  label: string;
+  count: number;
+  quantity: number;
+  amount: number;
+};
+
+export type SettlementSummary = Record<SettlementCategory, SettlementSummaryItem>;
+
+export type SettlementPreviewItem = {
+  id: string;
+  reseller_id: string;
+  customer_id: string;
+  customer_name: string;
+  category: SettlementCategory;
+  action: "create" | "convert" | "renew" | string;
+  tier: string;
+  quantity: number;
+  days: number;
+  unit_price: number;
+  amount: number;
+  period: string;
+  occurred_at: string;
+  settled: boolean;
+  settlement_id?: string | null;
+  settled_at?: string | null;
+};
+
+export type SettlementPreview = {
+  period: string;
+  trial_unit_price: number;
+  unlimited_daily_price: number;
+  summary: SettlementSummary;
+  total_amount: number;
+  unsettled_count: number;
+  items: SettlementPreviewItem[];
 };
 
 export type ResellerTier = {
@@ -786,11 +846,19 @@ export async function fetchResellerUsage() {
   return httpRequest<{ items: Array<{ reseller: ResellerKey; customer_count: number; usage: unknown }> }>("/api/auth/resellers/usage");
 }
 
-export async function createSettlement(resellerId: string, settlement: { period: string; customer_count: number; amount: number; status: string; notes: string }) {
+export async function createSettlement(resellerId: string, settlement: { period: string; status: string; notes: string; trial_unit_price?: number; unlimited_daily_price?: number }) {
   return httpRequest<{ item: Settlement; items: Settlement[] }>(`/api/auth/resellers/${resellerId}/settlement`, {
     method: "POST",
     body: settlement,
   });
+}
+
+export async function previewSettlement(resellerId: string, params: { period: string; trial_unit_price?: number; unlimited_daily_price?: number }) {
+  const searchParams = new URLSearchParams();
+  searchParams.set("period", params.period);
+  searchParams.set("trial_unit_price", String(params.trial_unit_price ?? 1));
+  searchParams.set("unlimited_daily_price", String(params.unlimited_daily_price ?? 2));
+  return httpRequest<SettlementPreview>(`/api/auth/resellers/${resellerId}/settlement-preview?${searchParams.toString()}`);
 }
 
 export async function fetchSettlements(resellerId: string) {

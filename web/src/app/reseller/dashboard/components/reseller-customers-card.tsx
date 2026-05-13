@@ -33,6 +33,8 @@ const TIER_OPTIONS = [
   { value: "unlimited", label: "不限制" },
 ];
 
+const UNLIMITED_TIER = "unlimited";
+const FIXED_TIER_VALID_DAYS = 30;
 const RESELLER_CUSTOMERS_CHANGED_EVENT = "reseller-customers-changed";
 
 function formatDateTime(value?: string | null) {
@@ -52,6 +54,10 @@ function formatRemainingDays(value: unknown) {
 
 function tierLabel(tier: string) {
   return TIER_OPTIONS.find((t) => t.value === tier)?.label || tier;
+}
+
+function canEditValidDays(tier: string) {
+  return tier === UNLIMITED_TIER;
 }
 
 function notifyCustomersChanged() {
@@ -117,12 +123,15 @@ export function ResellerCustomersCard() {
 
   const handleCreate = async () => {
     setIsCreating(true);
+    const validDays = canEditValidDays(createTier)
+      ? Math.max(1, Math.floor(Number(createValidDays) || FIXED_TIER_VALID_DAYS))
+      : FIXED_TIER_VALID_DAYS;
     try {
       const data = await createResellerCustomer(
         createName.trim(),
         createIsTrial,
         createIsTrial ? "trial" : createTier,
-        createIsTrial ? 1 : Math.max(1, Math.floor(Number(createValidDays) || 30)),
+        createIsTrial ? 1 : validDays,
         Math.max(1, Math.floor(Number(createMaxSessions) || 4)),
       );
       setItems((prev) => [...prev, data.item]);
@@ -205,7 +214,9 @@ export function ResellerCustomersCard() {
   const handleConvert = async () => {
     if (!convertingItem) return;
     const item = convertingItem;
-    const days = Math.max(1, Math.floor(Number(convertValidDays) || 30));
+    const days = canEditValidDays(convertTier)
+      ? Math.max(1, Math.floor(Number(convertValidDays) || FIXED_TIER_VALID_DAYS))
+      : FIXED_TIER_VALID_DAYS;
     setItemPending(item.id, true);
     try {
       const data = await convertTrialToPaid(item.id, convertTier, days);
@@ -288,6 +299,7 @@ export function ResellerCustomersCard() {
               {items.map((item) => {
                 const isPending = pendingIds.has(item.id);
                 const activeSessions = Math.max(0, Number(item.active_sessions) || 0);
+                const displayKey = String(item.display_key || "").trim();
                 return (
                   <div key={item.id} className="flex flex-col gap-3 rounded-xl border border-stone-200 bg-white px-4 py-4 md:flex-row md:items-center md:justify-between">
                     <div className="min-w-0 space-y-2">
@@ -299,6 +311,21 @@ export function ResellerCustomersCard() {
                         <Badge variant={item.enabled ? "success" : "secondary"} className="rounded-md">
                           {item.enabled ? "已启用" : "已禁用"}
                         </Badge>
+                      </div>
+                      <div className="flex max-w-3xl flex-col gap-2 rounded-lg bg-stone-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                        <code className={`break-all font-mono text-[12px] ${displayKey ? "text-stone-700" : "text-stone-400"}`}>
+                          {displayKey || "原始密钥未保存"}
+                        </code>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-8 shrink-0 rounded-lg border-stone-200 bg-white px-3 text-stone-700"
+                          onClick={() => void handleCopy(displayKey)}
+                          disabled={!displayKey}
+                        >
+                          <Copy className="size-3.5" />
+                          复制
+                        </Button>
                       </div>
                       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-500">
                         {!item.is_trial && <span>套餐 {tierLabel(item.tier)}</span>}
@@ -378,7 +405,15 @@ export function ResellerCustomersCard() {
               <>
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-stone-700">套餐</label>
-                  <Select value={createTier} onValueChange={setCreateTier}>
+                  <Select
+                    value={createTier}
+                    onValueChange={(value) => {
+                      setCreateTier(value);
+                      if (!canEditValidDays(value)) {
+                        setCreateValidDays(String(FIXED_TIER_VALID_DAYS));
+                      }
+                    }}
+                  >
                     <SelectTrigger className="h-11 rounded-xl border-stone-200 bg-white">
                       <SelectValue />
                     </SelectTrigger>
@@ -391,7 +426,20 @@ export function ResellerCustomersCard() {
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-stone-700">有效期（天）</label>
-                  <Input value={createValidDays} type="number" min="1" max="3650" step="1" onChange={(e) => setCreateValidDays(e.target.value)} placeholder="30" className="h-11 rounded-xl border-stone-200 bg-white" />
+                  <Input
+                    value={canEditValidDays(createTier) ? createValidDays : String(FIXED_TIER_VALID_DAYS)}
+                    type="number"
+                    min="1"
+                    max="3650"
+                    step="1"
+                    onChange={(e) => setCreateValidDays(e.target.value)}
+                    placeholder="30"
+                    disabled={!canEditValidDays(createTier)}
+                    className="h-11 rounded-xl border-stone-200 bg-white disabled:bg-stone-100 disabled:text-stone-500"
+                  />
+                  {!canEditValidDays(createTier) && (
+                    <p className="text-xs text-stone-500">有限套餐固定 30 天，便于管理员按套餐收款。</p>
+                  )}
                 </div>
               </>
             )}
@@ -483,7 +531,15 @@ export function ResellerCustomersCard() {
           <div className="space-y-4">
             <div className="space-y-2">
               <label className="text-sm font-medium text-stone-700">套餐</label>
-              <Select value={convertTier} onValueChange={setConvertTier}>
+              <Select
+                value={convertTier}
+                onValueChange={(value) => {
+                  setConvertTier(value);
+                  if (!canEditValidDays(value)) {
+                    setConvertValidDays(String(FIXED_TIER_VALID_DAYS));
+                  }
+                }}
+              >
                 <SelectTrigger className="h-11 rounded-xl border-stone-200 bg-white">
                   <SelectValue />
                 </SelectTrigger>
@@ -496,7 +552,20 @@ export function ResellerCustomersCard() {
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium text-stone-700">有效期（天）</label>
-              <Input value={convertValidDays} type="number" min="1" max="3650" step="1" onChange={(e) => setConvertValidDays(e.target.value)} placeholder="30" className="h-11 rounded-xl border-stone-200 bg-white" />
+              <Input
+                value={canEditValidDays(convertTier) ? convertValidDays : String(FIXED_TIER_VALID_DAYS)}
+                type="number"
+                min="1"
+                max="3650"
+                step="1"
+                onChange={(e) => setConvertValidDays(e.target.value)}
+                placeholder="30"
+                disabled={!canEditValidDays(convertTier)}
+                className="h-11 rounded-xl border-stone-200 bg-white disabled:bg-stone-100 disabled:text-stone-500"
+              />
+              {!canEditValidDays(convertTier) && (
+                <p className="text-xs text-stone-500">有限套餐固定 30 天，便于管理员按套餐收款。</p>
+              )}
             </div>
           </div>
           <DialogFooter>

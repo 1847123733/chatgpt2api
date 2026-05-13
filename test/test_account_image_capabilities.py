@@ -11,8 +11,11 @@ os.environ.setdefault("CHATGPT2API_AUTH_KEY", "test-auth")
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from api import accounts as accounts_module
 from api import reseller as reseller_module
 from api import support as support_module
+from services import auth_service as auth_service_module
+from services import reseller_billing_service as billing_module
 from services.account_service import AccountService
 from services.auth_service import AuthError, AuthService
 from services.storage.json_storage import JSONStorageBackend
@@ -93,6 +96,7 @@ class AuthServiceTests(unittest.TestCase):
             self.assertEqual(item["name"], "Alice")
             self.assertTrue(item["enabled"])
             self.assertTrue(raw_key.startswith("sk-"))
+            self.assertEqual(item["display_key"], raw_key)
 
             authed = service.authenticate(raw_key, allow_create_session=True)
             self.assertIsNotNone(authed)
@@ -134,6 +138,7 @@ class AuthServiceTests(unittest.TestCase):
             updated = service.update_key(item["id"], {"key": "sk-user-custom-key"}, role="user")
 
             self.assertIsNotNone(updated)
+            self.assertEqual(updated["display_key"], "sk-user-custom-key")
             self.assertIsNone(service.authenticate(raw_key, allow_create_session=True))
 
             authed = service.authenticate("sk-user-custom-key", allow_create_session=True)
@@ -341,6 +346,43 @@ class ResellerApiAuthTests(unittest.TestCase):
         }
         return tmp_dir, service, client, headers, original_reseller_auth_service, original_support_auth_service
 
+    def _with_billing_client(self):
+        tmp_dir = tempfile.TemporaryDirectory()
+        service = AuthService(JSONStorageBackend(Path(tmp_dir.name) / "accounts.json", Path(tmp_dir.name) / "auth_keys.json"))
+        reseller, raw_key = service.create_key(role="reseller", name="Agency", cost_per_user=5)
+        identity = service.authenticate(raw_key, allow_create_session=True)
+        self.assertIsNotNone(identity)
+
+        originals = {
+            "reseller_auth_service": reseller_module.auth_service,
+            "accounts_auth_service": accounts_module.auth_service,
+            "support_auth_service": support_module.auth_service,
+            "global_auth_service": auth_service_module.auth_service,
+            "get_storage_backend": billing_module.config.get_storage_backend,
+        }
+        reseller_module.auth_service = service
+        accounts_module.auth_service = service
+        support_module.auth_service = service
+        auth_service_module.auth_service = service
+        billing_module.config.get_storage_backend = lambda: service.storage
+        app = FastAPI()
+        app.include_router(reseller_module.create_router())
+        app.include_router(accounts_module.create_router())
+        client = TestClient(app)
+        reseller_headers = {
+            "Authorization": f"Bearer {raw_key}",
+            "x-session-id": str(identity["session_id"]),
+        }
+        admin_headers = {"Authorization": "Bearer test-auth"}
+        return tmp_dir, client, reseller, reseller_headers, admin_headers, originals
+
+    def _restore_billing_client(self, originals: dict[str, object]) -> None:
+        reseller_module.auth_service = originals["reseller_auth_service"]
+        accounts_module.auth_service = originals["accounts_auth_service"]
+        support_module.auth_service = originals["support_auth_service"]
+        auth_service_module.auth_service = originals["global_auth_service"]
+        billing_module.config.get_storage_backend = originals["get_storage_backend"]
+
     def test_reseller_routes_accept_x_session_id_header(self) -> None:
         tmp_dir, _service, client, headers, original_reseller_auth_service, original_support_auth_service = self._with_reseller_client()
         try:
@@ -376,6 +418,102 @@ class ResellerApiAuthTests(unittest.TestCase):
         self.assertEqual(payload["paid_customers"], 0)
         self.assertEqual(payload["max_trial_keys"], 20)
         self.assertEqual(payload["trial_quota_remaining"], 19)
+
+    def test_reseller_limited_tier_uses_fixed_valid_days(self) -> None:
+        tmp_dir, _service, client, headers, original_reseller_auth_service, original_support_auth_service = self._with_reseller_client()
+        try:
+            response = client.post(
+                "/api/reseller/customers",
+                headers=headers,
+                json={"name": "Paid A", "is_trial": False, "tier": "200", "valid_days": 365, "max_sessions": 4},
+            )
+        finally:
+            reseller_module.auth_service = original_reseller_auth_service
+            support_module.auth_service = original_support_auth_service
+            tmp_dir.cleanup()
+
+        self.assertEqual(response.status_code, 200)
+        item = response.json()["item"]
+        self.assertEqual(item["remaining_days"], 30)
+
+    def test_reseller_unlimited_tier_accepts_custom_valid_days(self) -> None:
+        tmp_dir, _service, client, headers, original_reseller_auth_service, original_support_auth_service = self._with_reseller_client()
+        try:
+            response = client.post(
+                "/api/reseller/customers",
+                headers=headers,
+                json={"name": "Unlimited A", "is_trial": False, "tier": "unlimited", "valid_days": 90, "max_sessions": 4},
+            )
+        finally:
+            reseller_module.auth_service = original_reseller_auth_service
+            support_module.auth_service = original_support_auth_service
+            tmp_dir.cleanup()
+
+        self.assertEqual(response.status_code, 200)
+        item = response.json()["item"]
+        self.assertEqual(item["remaining_days"], 90)
+
+    def test_reseller_settlement_preview_and_confirm_marks_events_settled(self) -> None:
+        tmp_dir, client, reseller, reseller_headers, admin_headers, originals = self._with_billing_client()
+        try:
+            period = datetime.now(timezone.utc).strftime("%Y-%m")
+            package_response = client.post(
+                "/api/reseller/customers",
+                headers=reseller_headers,
+                json={"name": "Package A", "is_trial": False, "tier": "200", "valid_days": 30, "max_sessions": 4},
+            )
+            trial_response = client.post(
+                "/api/reseller/customers",
+                headers=reseller_headers,
+                json={"name": "Trial A", "is_trial": True, "tier": "trial", "valid_days": 1, "max_sessions": 4},
+            )
+            unlimited_response = client.post(
+                "/api/reseller/customers",
+                headers=reseller_headers,
+                json={"name": "Unlimited A", "is_trial": False, "tier": "unlimited", "valid_days": 3, "max_sessions": 4},
+            )
+            package_id = package_response.json()["item"]["id"]
+            renew_response = client.post(
+                f"/api/reseller/customers/{package_id}",
+                headers=reseller_headers,
+                json={"renew_days": 30},
+            )
+            preview_response = client.get(
+                f"/api/auth/resellers/{reseller['id']}/settlement-preview?period={period}&trial_unit_price=1&unlimited_daily_price=2",
+                headers=admin_headers,
+            )
+            settle_response = client.post(
+                f"/api/auth/resellers/{reseller['id']}/settlement",
+                headers=admin_headers,
+                json={"period": period, "status": "paid", "notes": "paid", "trial_unit_price": 1, "unlimited_daily_price": 2},
+            )
+            after_preview_response = client.get(
+                f"/api/auth/resellers/{reseller['id']}/settlement-preview?period={period}&trial_unit_price=1&unlimited_daily_price=2",
+                headers=admin_headers,
+            )
+        finally:
+            self._restore_billing_client(originals)
+            tmp_dir.cleanup()
+
+        self.assertEqual(package_response.status_code, 200)
+        self.assertEqual(trial_response.status_code, 200)
+        self.assertEqual(unlimited_response.status_code, 200)
+        self.assertEqual(renew_response.status_code, 200)
+        self.assertEqual(preview_response.status_code, 200)
+        preview = preview_response.json()
+        self.assertEqual(preview["unsettled_count"], 4)
+        self.assertEqual(preview["summary"]["package"]["count"], 2)
+        self.assertEqual(preview["summary"]["trial"]["count"], 1)
+        self.assertEqual(preview["summary"]["unlimited"]["quantity"], 3)
+        self.assertEqual(preview["total_amount"], 17.0)
+        self.assertEqual(settle_response.status_code, 200)
+        settlement = settle_response.json()["item"]
+        self.assertEqual(settlement["amount"], 17.0)
+        self.assertEqual(settlement["event_count"], 4)
+        self.assertEqual(after_preview_response.status_code, 200)
+        after_preview = after_preview_response.json()
+        self.assertEqual(after_preview["unsettled_count"], 0)
+        self.assertTrue(all(item["settled"] for item in after_preview["items"]))
 
 
 if __name__ == "__main__":
