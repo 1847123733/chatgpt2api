@@ -1,5 +1,5 @@
 "use client";
-import { ArrowUp, Check, ChevronDown, ImagePlus, LoaderCircle, X } from "lucide-react";
+import { ArrowUp, Check, ChevronDown, ImagePlus, LoaderCircle, Square, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type RefObject } from "react";
 
 import { ImageLightbox } from "@/components/image-lightbox";
@@ -22,6 +22,7 @@ type ImageComposerProps = {
   onImageCountChange: (value: string) => void;
   onImageSizeChange: (value: string) => void;
   onSubmit: () => void | Promise<void>;
+  onAbort?: () => void;
   onPickReferenceImage: () => void;
   onReferenceImageChange: (files: File[]) => void | Promise<void>;
   onRemoveReferenceImage: (index: number) => void;
@@ -41,6 +42,7 @@ export function ImageComposer({
   onImageCountChange,
   onImageSizeChange,
   onSubmit,
+  onAbort,
   onPickReferenceImage,
   onReferenceImageChange,
   onRemoveReferenceImage,
@@ -48,7 +50,6 @@ export function ImageComposer({
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [isSizeMenuOpen, setIsSizeMenuOpen] = useState(false);
-  const [customSizeInput, setCustomSizeInput] = useState("");
   const [sizeMenuPos, setSizeMenuPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const sizeMenuRef = useRef<HTMLDivElement>(null);
   const sizeMenuBtnRef = useRef<HTMLButtonElement>(null);
@@ -65,10 +66,7 @@ export function ImageComposer({
     { value: "9:16", label: "9:16 (竖版)" },
   ];
   const imageSizeOption = imageSizeOptions.find((option) => option.value === imageSize);
-  const isCustomImageSize = Boolean(imageSize && !imageSizeOption);
   const imageSizeLabel = imageSizeOption?.label || imageSize || "未指定";
-  const normalizedCustomSize = customSizeInput.trim().replace(/\s+/g, "");
-  const canApplyCustomSize = /^(\d{2,5})(?:x|X|\*|×)(\d{2,5})$/.test(normalizedCustomSize) || /^\d{1,5}:\d{1,5}$/.test(normalizedCustomSize);
 
   useEffect(() => {
     if (!isSizeMenuOpen) {
@@ -85,11 +83,6 @@ export function ImageComposer({
     };
   }, [isSizeMenuOpen]);
 
-  useEffect(() => {
-    if (isCustomImageSize) {
-      setCustomSizeInput(imageSize);
-    }
-  }, [imageSize, isCustomImageSize]);
 
   const handleTextareaPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
     const imageFiles = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
@@ -272,51 +265,34 @@ export function ImageComposer({
                             </button>
                           );
                         })}
-                        <div className="mt-1 border-t border-stone-100 px-1 pt-2">
-                          <div className="flex items-center gap-1.5 rounded-2xl bg-stone-50 px-2 py-1.5">
-                            <Input
-                              value={customSizeInput}
-                              onChange={(event) => setCustomSizeInput(event.target.value)}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter" && canApplyCustomSize) {
-                                  onImageSizeChange(normalizedCustomSize.replace("*", "x").replace("×", "x"));
-                                  setIsSizeMenuOpen(false);
-                                }
-                              }}
-                              placeholder="1980x980"
-                              className="h-8 min-w-0 border-0 bg-transparent px-1 text-xs font-medium text-stone-800 shadow-none placeholder:text-stone-400 focus-visible:ring-0"
-                            />
-                            <button
-                              type="button"
-                              disabled={!canApplyCustomSize}
-                              className="shrink-0 rounded-xl px-2 py-1 text-xs font-medium text-stone-700 transition hover:bg-white disabled:cursor-not-allowed disabled:text-stone-300"
-                              onClick={() => {
-                                if (!canApplyCustomSize) {
-                                  return;
-                                }
-                                onImageSizeChange(normalizedCustomSize.replace("*", "x").replace("×", "x"));
-                                setIsSizeMenuOpen(false);
-                              }}
-                            >
-                              应用
-                            </button>
-                          </div>
-                        </div>
+
                       </div>
                     ) : null}
                   </div>
 
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => void onSubmit()}
-                  disabled={!prompt.trim()}
-                  className="inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-stone-950 text-white transition hover:bg-stone-800 disabled:cursor-not-allowed disabled:bg-stone-300 sm:size-11"
-                  aria-label={referenceImages.length > 0 ? "编辑图片" : "生成图片"}
-                >
-                  <ArrowUp className="size-3.5 sm:size-4" />
-                </button>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {activeTaskCount > 0 && onAbort ? (
+                    <button
+                      type="button"
+                      onClick={onAbort}
+                      className="inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-rose-600 text-white transition hover:bg-rose-700 sm:size-11"
+                      aria-label="中止生成"
+                    >
+                      <Square className="size-3.5 fill-current sm:size-4" />
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => void onSubmit()}
+                    disabled={!prompt.trim()}
+                    className="inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-stone-950 text-white transition hover:bg-stone-800 disabled:cursor-not-allowed disabled:bg-stone-300 sm:size-11"
+                    aria-label={referenceImages.length > 0 ? "编辑图片" : "生成图片"}
+                  >
+                    <ArrowUp className="size-3.5 sm:size-4" />
+                  </button>
+                </div>
               </div>
             </div>
           </div>

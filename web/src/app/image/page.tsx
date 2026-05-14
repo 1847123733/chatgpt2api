@@ -57,6 +57,7 @@ function clampImageCount(value: string) {
   return String(Math.min(100, Math.max(1, Math.floor(Number(value) || 1))));
 }
 const activeConversationQueueIds = new Set<string>();
+const abortedConversationIds = new Set<string>();
 
 function buildConversationTitle(prompt: string) {
   const trimmed = prompt.trim();
@@ -940,6 +941,11 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
           throw new Error("未找到可用于继续编辑的参考图");
         }
 
+        if (abortedConversationIds.has(conversationId)) {
+          abortedConversationIds.delete(conversationId);
+          throw new Error("已中止生成");
+        }
+
         const pendingImages = activeTurn.images.filter((image) => image.status === "loading");
         const submitted = await Promise.all(
           pendingImages.map((image) => {
@@ -952,6 +958,11 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         await applyTasks(submitted);
 
         while (true) {
+          if (abortedConversationIds.has(conversationId)) {
+            abortedConversationIds.delete(conversationId);
+            throw new Error("已中止生成");
+          }
+
           const latestConversation = conversationsRef.current.find((conversation) => conversation.id === conversationId);
           const latestTurn = latestConversation?.turns.find((turn) => turn.id === activeTurn.id);
           const loadingTaskIds =
@@ -963,6 +974,12 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
           }
 
           await sleep(2000);
+
+          if (abortedConversationIds.has(conversationId)) {
+            abortedConversationIds.delete(conversationId);
+            throw new Error("已中止生成");
+          }
+
           const taskList = await fetchImageTasks(loadingTaskIds);
           if (taskList.items.length > 0) {
             await applyTasks(taskList.items);
@@ -984,7 +1001,6 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
           }
         }
 
-        await loadQuota();
       } catch (error) {
         const message = error instanceof Error ? error.message : "生成图片失败";
         await updateConversation(conversationId, (current) => {
@@ -1023,7 +1039,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         }
       }
     },
-    [loadQuota, updateConversation],
+    [updateConversation],
   );
   /* eslint-enable react-hooks/preserve-manual-memoization */
 
@@ -1189,6 +1205,23 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       }
     }
   }, [conversations, runConversationQueue]);
+
+  const handleAbort = useCallback(() => {
+    const activeConversations = conversationsRef.current.filter((conversation) =>
+      conversation.turns.some(
+        (turn) =>
+          (turn.status === "queued" || turn.status === "generating") &&
+          turn.images.some((image) => image.status === "loading"),
+      ),
+    );
+    if (activeConversations.length === 0) {
+      return;
+    }
+    for (const conversation of activeConversations) {
+      abortedConversationIds.add(conversation.id);
+    }
+    toast.success("正在中止所有生成任务");
+  }, []);
 
   const handleSubmit = async () => {
     const prompt = imagePrompt.trim();
@@ -1359,6 +1392,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
             onImageCountChange={(value) => setImageCount(value ? clampImageCount(value) : "")}
             onImageSizeChange={setImageSize}
             onSubmit={handleSubmit}
+            onAbort={handleAbort}
             onPickReferenceImage={() => fileInputRef.current?.click()}
             onReferenceImageChange={handleReferenceImageChange}
             onRemoveReferenceImage={handleRemoveReferenceImage}
