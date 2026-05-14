@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { History, LoaderCircle, Plus, Trash2 } from "lucide-react";
+import { History, LoaderCircle, Plus, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
@@ -21,12 +21,17 @@ import { Button } from "@/components/ui/button";
 import {
   createImageEditTask,
   createImageGenerationTask,
+  createUserPromptSquareItem,
   fetchAccounts,
   fetchImageTasks,
   fetchUserProfile,
+  uploadUserPromptSquareImage,
   type Account,
   type ImageTask,
+  type UserPromptSquarePayload,
 } from "@/lib/api";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 import {
   clearImageConversations,
@@ -370,6 +375,18 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     | { type: "all" }
     | null
   >(null);
+  const [promptSquareOpen, setPromptSquareOpen] = useState(false);
+  const [promptSquareForm, setPromptSquareForm] = useState<UserPromptSquarePayload>({
+    title: "",
+    prompt: "",
+    description: "",
+    preview_image_url: "",
+    categories: [],
+    language: "zh",
+  });
+  const [promptSquareImageFile, setPromptSquareImageFile] = useState<File | null>(null);
+  const [promptSquareImagePreview, setPromptSquareImagePreview] = useState("");
+  const [isSubmittingPromptSquare, setIsSubmittingPromptSquare] = useState(false);
 
   const parsedCount = useMemo(() => Number(clampImageCount(imageCount)), [imageCount]);
   const selectedConversation = useMemo(
@@ -1092,6 +1109,71 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     [runConversationQueue],
   );
 
+  const handleAddToPromptSquare = useCallback(async (image: StoredImage, prompt: string) => {
+    let file: File;
+    if (image.b64_json) {
+      const binary = atob(image.b64_json);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      file = new File([bytes], "preview.png", { type: "image/png" });
+    } else if (image.url) {
+      try {
+        const res = await fetch(image.url);
+        const blob = await res.blob();
+        file = new File([blob], "preview.png", { type: blob.type || "image/png" });
+      } catch {
+        toast.error("获取图片失败");
+        return;
+      }
+    } else {
+      toast.error("无可用图片");
+      return;
+    }
+
+    const previewUrl = URL.createObjectURL(file);
+    setPromptSquareImageFile(file);
+    setPromptSquareImagePreview(previewUrl);
+    setPromptSquareForm({
+      title: prompt.slice(0, 30),
+      prompt,
+      description: "",
+      preview_image_url: "",
+      categories: [],
+      language: "zh",
+    });
+    setPromptSquareOpen(true);
+  }, []);
+
+  const handleSubmitPromptSquare = useCallback(async () => {
+    if (!promptSquareForm.prompt.trim()) {
+      toast.error("请填写 Prompt");
+      return;
+    }
+    setIsSubmittingPromptSquare(true);
+    try {
+      let previewImageUrl = "";
+      if (promptSquareImageFile) {
+        const uploaded = await uploadUserPromptSquareImage(promptSquareImageFile);
+        previewImageUrl = uploaded.url;
+      }
+      await createUserPromptSquareItem({
+        ...promptSquareForm,
+        preview_image_url: previewImageUrl,
+      });
+      toast.success("已添加到提示词广场");
+      setPromptSquareOpen(false);
+      setPromptSquareImageFile(null);
+      if (promptSquareImagePreview) {
+        URL.revokeObjectURL(promptSquareImagePreview);
+        setPromptSquareImagePreview("");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "添加失败");
+    } finally {
+      setIsSubmittingPromptSquare(false);
+    }
+  }, [promptSquareForm, promptSquareImageFile, promptSquareImagePreview]);
+
   useEffect(() => {
     for (const conversation of conversations) {
       if (
@@ -1258,6 +1340,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               onReuseTurnConfig={handleReuseTurnConfig}
               onRegenerateTurn={handleRegenerateTurn}
               onRetryImage={handleRetryImage}
+              onAddToPromptSquare={isAdmin ? handleAddToPromptSquare : undefined}
               formatConversationTime={formatConversationTime}
             />
           </div>
@@ -1311,6 +1394,89 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
           </DialogContent>
         </Dialog>
       ) : null}
+
+      <Dialog open={promptSquareOpen} onOpenChange={(open) => {
+        if (!open) {
+          setPromptSquareOpen(false);
+          if (promptSquareImagePreview) {
+            URL.revokeObjectURL(promptSquareImagePreview);
+            setPromptSquareImagePreview("");
+          }
+          setPromptSquareImageFile(null);
+        }
+      }}>
+        <DialogContent className="max-h-[85dvh] w-[92vw] max-w-[520px] overflow-y-auto rounded-2xl p-6">
+          <DialogHeader className="gap-1">
+            <DialogTitle className="flex items-center gap-2">
+              <Upload className="size-5" />
+              添加到提示词广场
+            </DialogTitle>
+          </DialogHeader>
+          <div className="mt-4 space-y-4">
+            {promptSquareImagePreview ? (
+              <div className="flex justify-center">
+                <img
+                  src={promptSquareImagePreview}
+                  alt="预览"
+                  className="max-h-48 rounded-xl border border-stone-200 object-contain"
+                />
+              </div>
+            ) : null}
+            <div className="space-y-1.5">
+              <div className="text-sm font-medium text-stone-700">标题</div>
+              <Input
+                value={promptSquareForm.title}
+                onChange={(e) => setPromptSquareForm((prev) => ({ ...prev, title: e.target.value }))}
+                placeholder="简短标题"
+                className="rounded-xl"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <div className="text-sm font-medium text-stone-700">Prompt</div>
+              <Textarea
+                value={promptSquareForm.prompt}
+                onChange={(e) => setPromptSquareForm((prev) => ({ ...prev, prompt: e.target.value }))}
+                placeholder="完整提示词"
+                className="min-h-[120px] rounded-xl"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <div className="text-sm font-medium text-stone-700">描述（可选）</div>
+              <Input
+                value={promptSquareForm.description || ""}
+                onChange={(e) => setPromptSquareForm((prev) => ({ ...prev, description: e.target.value }))}
+                placeholder="简要描述效果或用途"
+                className="rounded-xl"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <div className="text-sm font-medium text-stone-700">分类（可选，逗号分隔）</div>
+              <Input
+                value={(promptSquareForm.categories || []).join(", ")}
+                onChange={(e) => setPromptSquareForm((prev) => ({
+                  ...prev,
+                  categories: e.target.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean),
+                }))}
+                placeholder="例如：插画, 人像"
+                className="rounded-xl"
+              />
+            </div>
+          </div>
+          <DialogFooter className="mt-5">
+            <Button variant="outline" onClick={() => setPromptSquareOpen(false)}>
+              取消
+            </Button>
+            <Button
+              className="bg-stone-950 text-white hover:bg-stone-800"
+              disabled={isSubmittingPromptSquare || !promptSquareForm.prompt.trim()}
+              onClick={() => void handleSubmitPromptSquare()}
+            >
+              {isSubmittingPromptSquare ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
+              确认添加
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

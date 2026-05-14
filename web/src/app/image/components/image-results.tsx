@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Clock3, Download, LoaderCircle, RotateCcw, Sparkles, Trash2 } from "lucide-react";
+import { Clock3, Download, LoaderCircle, Plus, RotateCcw, Sparkles, Trash2, Upload } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -23,6 +23,7 @@ type ImageResultsProps = {
   onReuseTurnConfig: (conversationId: string, turnId: string) => void | Promise<void>;
   onRegenerateTurn: (conversationId: string, turnId: string) => void | Promise<void>;
   onRetryImage: (conversationId: string, turnId: string, imageId: string) => void | Promise<void>;
+  onAddToPromptSquare?: (image: StoredImage, prompt: string) => void;
   formatConversationTime: (value: string) => string;
 };
 
@@ -65,6 +66,7 @@ export function ImageResults({
   onReuseTurnConfig,
   onRegenerateTurn,
   onRetryImage,
+  onAddToPromptSquare,
   formatConversationTime,
 }: ImageResultsProps) {
   const [imageDimensions, setImageDimensions] = useState<Record<string, string>>({});
@@ -236,12 +238,12 @@ export function ImageResults({
                                 }}
                               />
                             </button>
-                            <div className="flex flex-col gap-1 px-0.5 py-1 text-[10px] sm:flex-row sm:items-center sm:justify-between sm:gap-2 sm:px-3 sm:py-3 sm:text-xs">
+                            <div className="flex flex-col gap-1 px-0.5 py-1 text-[10px] sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-2 sm:px-3 sm:py-3 sm:text-xs">
                               <div className="min-w-0 text-stone-500">
                                 <span>结果 {index + 1}</span>
                                 {imageMeta ? <span className="block text-stone-400 sm:ml-2 sm:inline">{imageMeta}</span> : null}
                               </div>
-                              <div className="flex items-center gap-1.5">
+                              <div className="flex flex-wrap items-center gap-1.5">
                                 <Button
                                   variant="outline"
                                   size="sm"
@@ -262,6 +264,18 @@ export function ImageResults({
                                   <Download className="size-3 sm:size-4" />
                                   <span className="hidden sm:inline">下载</span>
                                 </Button>
+                                {onAddToPromptSquare ? (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-7 w-7 rounded-full border-stone-200 bg-white px-0 text-[10px] text-stone-700 hover:bg-stone-50 sm:h-8 sm:w-fit sm:px-3 sm:text-xs"
+                                    onClick={() => onAddToPromptSquare(image, turn.prompt)}
+                                    aria-label="一键添加提示词"
+                                  >
+                                    <Upload className="size-3 sm:size-4" />
+                                    <span className="hidden lg:inline">添加提示词</span>
+                                  </Button>
+                                ) : null}
                               </div>
                             </div>
                           </div>
