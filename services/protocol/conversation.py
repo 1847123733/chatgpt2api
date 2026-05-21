@@ -10,7 +10,10 @@ from math import gcd
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
+import io
+
 import tiktoken
+from PIL import Image
 
 from services.account_service import account_service
 from services.config import config
@@ -70,11 +73,27 @@ def encode_images(images: Iterable[tuple[bytes, str, str]]) -> list[str]:
 def save_image_bytes(image_data: bytes, base_url: str | None = None) -> str:
     config.cleanup_old_images()
     file_hash = hashlib.md5(image_data).hexdigest()
-    filename = f"{int(time.time())}_{file_hash}.png"
     relative_dir = Path(time.strftime("%Y"), time.strftime("%m"), time.strftime("%d"))
-    file_path = config.images_dir / relative_dir / filename
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    file_path.write_bytes(image_data)
+    output_dir = config.images_dir / relative_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        image = Image.open(io.BytesIO(image_data))
+        if image.mode == "RGBA":
+            background = Image.new("RGB", image.size, (255, 255, 255))
+            background.paste(image, mask=image.split()[3])
+            image = background
+        elif image.mode != "RGB":
+            image = image.convert("RGB")
+        buffer = io.BytesIO()
+        image.save(buffer, format="WEBP", quality=90, method=4)
+        webp_data = buffer.getvalue()
+        filename = f"{int(time.time())}_{file_hash}.webp"
+        file_path = output_dir / filename
+        file_path.write_bytes(webp_data)
+    except Exception:
+        filename = f"{int(time.time())}_{file_hash}.png"
+        file_path = output_dir / filename
+        file_path.write_bytes(image_data)
     return f"{(base_url or config.base_url)}/images/{relative_dir.as_posix()}/{filename}"
 
 

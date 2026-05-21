@@ -47,10 +47,10 @@ export function BaseUrlCard() {
               <Input
                 value={baseUrl}
                 onChange={(event) => setBaseUrl(event.target.value)}
-                placeholder="https://example.com"
+                placeholder="https://linwan.ccwu.cc"
                 className="h-11 rounded-xl border-stone-200 bg-white"
               />
-              <p className="text-sm text-stone-500">留空则使用环境变量或默认值，保存时会自动去掉首尾空格。</p>
+              <p className="text-sm text-stone-500">留空则使用环境变量或默认值 https://linwan.ccwu.cc，保存时会自动去掉首尾空格。</p>
             </div>
 
             <div className="flex justify-end">

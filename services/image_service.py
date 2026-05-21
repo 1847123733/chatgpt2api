@@ -48,11 +48,16 @@ def _safe_image_path(relative_path: str) -> Path:
 
 def _thumbnail_path(relative_path: str) -> Path:
     rel = _safe_relative_path(relative_path)
-    return config.image_thumbnails_dir / f"{rel}.png"
+    stem = Path(rel).stem
+    parent = Path(rel).parent
+    return config.image_thumbnails_dir / parent / f"{stem}.webp"
 
 
 def thumbnail_url(base_url: str, relative_path: str) -> str:
-    return f"{base_url.rstrip('/')}/image-thumbnails/{_safe_relative_path(relative_path)}"
+    rel = _safe_relative_path(relative_path)
+    stem = Path(rel).stem
+    parent = Path(rel).parent
+    return f"{base_url.rstrip('/')}/image-thumbnails/{parent}/{stem}.webp"
 
 
 def _image_dimensions(path: Path) -> tuple[int, int] | None:
@@ -77,7 +82,7 @@ def ensure_thumbnail(relative_path: str) -> Path:
             if image.mode not in {"RGB", "RGBA"}:
                 image = image.convert("RGBA" if "A" in image.getbands() else "RGB")
             image.thumbnail(THUMBNAIL_SIZE, Image.Resampling.LANCZOS)
-            image.save(target, format="PNG", optimize=True)
+            image.save(target, format="WEBP", quality=85, method=4)
     except HTTPException:
         raise
     except Exception as exc:
@@ -102,7 +107,13 @@ def cleanup_image_thumbnails() -> int:
         if not path.is_file():
             continue
         rel = path.relative_to(thumbnails_root).as_posix()
-        if not rel.endswith(".png") or not (images_root / rel[:-4]).exists():
+        stem = Path(rel).stem
+        parent = Path(rel).parent
+        source_exists = any(
+            (images_root / parent / f"{stem}{ext}").exists()
+            for ext in (".png", ".webp", ".jpg", ".jpeg")
+        )
+        if not source_exists:
             path.unlink()
             removed += 1
     _cleanup_empty_dirs(thumbnails_root)

@@ -297,7 +297,7 @@ class ConfigStore:
         return str(
             os.getenv("CHATGPT2API_BASE_URL")
             or self.data.get("base_url")
-            or ""
+            or "https://linwan.ccwu.cc"
         ).strip().rstrip("/")
 
     @property

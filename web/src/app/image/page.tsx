@@ -54,7 +54,7 @@ const IMAGE_SIZE_STORAGE_KEY = "chatgpt2api:image_last_size";
 const IMAGE_COUNT_STORAGE_KEY = "chatgpt2api:image_last_count";
 
 function clampImageCount(value: string) {
-  return String(Math.min(100, Math.max(1, Math.floor(Number(value) || 1))));
+  return String(Math.min(4, Math.max(1, Math.floor(Number(value) || 1))));
 }
 const activeConversationQueueIds = new Set<string>();
 const abortedConversationIds = new Set<string>();
