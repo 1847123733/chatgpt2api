@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 import time
@@ -9,6 +10,7 @@ from math import gcd
 from typing import Any, Iterable, Iterator
 
 import io
+from pathlib import Path
 
 import tiktoken
 from PIL import Image

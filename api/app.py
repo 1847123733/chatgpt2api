@@ -6,6 +6,7 @@ from threading import Event
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from starlette.staticfiles import StaticFiles
 
 from api import accounts, ai, image_proxy, image_tasks, prompt_square, register, system, reseller
 from api.errors import install_exception_handlers
