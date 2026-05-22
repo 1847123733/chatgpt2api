@@ -250,6 +250,9 @@ export type UserKey = {
   active_sessions?: number | null;
   owner_id?: string | null;
   owner_name?: string | null;
+  health_limit?: number | null;
+  health_violations?: number | null;
+  health_violation_log?: Array<{ words: string[]; prompt: string; time: string }> | null;
 };
 
 export type UserKeyUsageLog = {
@@ -686,16 +689,16 @@ export async function fetchUserKeyUsage() {
   return httpRequest<{ summary: UserKeyUsageSummary; items: UserKeyUsageItem[] }>("/api/auth/users/usage");
 }
 
-export async function createUserKey(name: string, validDays = 30, maxSessions = 4) {
+export async function createUserKey(name: string, validDays = 30, maxSessions = 4, healthLimit = 5) {
   return httpRequest<{ item: UserKey; key: string; items: UserKey[] }>("/api/auth/users", {
     method: "POST",
-    body: { name, valid_days: validDays, max_sessions: maxSessions },
+    body: { name, valid_days: validDays, max_sessions: maxSessions, health_limit: healthLimit },
   });
 }
 
 export async function updateUserKey(
   keyId: string,
-  updates: { enabled?: boolean; name?: string; key?: string; valid_days?: number; renew_days?: number; max_sessions?: number },
+  updates: { enabled?: boolean; name?: string; key?: string; valid_days?: number; renew_days?: number; max_sessions?: number; health_limit?: number },
 ) {
   return httpRequest<{ item: UserKey; items: UserKey[] }>(`/api/auth/users/${keyId}`, {
     method: "POST",
@@ -705,6 +708,12 @@ export async function updateUserKey(
 
 export async function clearUserKeySessions(keyId: string) {
   return httpRequest<{ item: UserKey; items: UserKey[] }>(`/api/auth/users/${keyId}/clear-sessions`, {
+    method: "POST",
+  });
+}
+
+export async function resetUserKeyHealth(keyId: string) {
+  return httpRequest<{ item: UserKey; items: UserKey[] }>(`/api/auth/users/${keyId}/reset-health`, {
     method: "POST",
   });
 }
@@ -870,16 +879,16 @@ export async function fetchResellerCustomers() {
   return httpRequest<{ items: ResellerCustomer[] }>("/api/reseller/customers");
 }
 
-export async function createResellerCustomer(name: string, isTrial: boolean, tier: string, validDays = 30, maxSessions = 4) {
+export async function createResellerCustomer(name: string, isTrial: boolean, tier: string, validDays = 30, maxSessions = 4, healthLimit = 5) {
   return httpRequest<{ item: ResellerCustomer; key: string }>("/api/reseller/customers", {
     method: "POST",
-    body: { name, is_trial: isTrial, tier, valid_days: validDays, max_sessions: maxSessions },
+    body: { name, is_trial: isTrial, tier, valid_days: validDays, max_sessions: maxSessions, health_limit: healthLimit },
   });
 }
 
 export async function updateResellerCustomer(
   customerId: string,
-  updates: { name?: string; enabled?: boolean; key?: string; valid_days?: number; renew_days?: number; max_sessions?: number; tier?: string },
+  updates: { name?: string; enabled?: boolean; key?: string; valid_days?: number; renew_days?: number; max_sessions?: number; tier?: string; health_limit?: number },
 ) {
   return httpRequest<{ item: ResellerCustomer }>(`/api/reseller/customers/${customerId}`, {
     method: "POST",
@@ -895,6 +904,12 @@ export async function deleteResellerCustomer(customerId: string) {
 
 export async function clearResellerCustomerSessions(customerId: string) {
   return httpRequest<{ item: ResellerCustomer }>(`/api/reseller/customers/${customerId}/clear-sessions`, {
+    method: "POST",
+  });
+}
+
+export async function resetResellerCustomerHealth(customerId: string) {
+  return httpRequest<{ item: ResellerCustomer }>(`/api/reseller/customers/${customerId}/reset-health`, {
     method: "POST",
   });
 }

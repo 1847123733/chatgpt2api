@@ -13,7 +13,9 @@
   ],
   "proxy": "",
   "base_url": "",
-  "sensitive_words": [],
+  "sensitive_words": [
+    "裸体"
+  ],
   "global_system_prompt": "",
   "ai_review": {
     "enabled": false,
@@ -25,9 +27,9 @@
   "backup": {
     "enabled": false,
     "provider": "cloudflare_r2",
-    "account_id": "",
+    "account_id": "17845999999",
     "access_key_id": "",
-    "secret_access_key": "",
+    "secret_access_key": "123456",
     "bucket": "",
     "prefix": "backups",
     "interval_minutes": 1440,
@@ -46,5 +48,27 @@
       "images": false
     }
   },
-  "image_account_concurrency": 3
+  "image_account_concurrency": 3,
+  "reseller_tiers": [
+    {
+      "name": "100",
+      "limit": 100,
+      "label": "100次/月"
+    },
+    {
+      "name": "200",
+      "limit": 200,
+      "label": "200次/月"
+    },
+    {
+      "name": "300",
+      "limit": 300,
+      "label": "300次/月"
+    },
+    {
+      "name": "unlimited",
+      "limit": 999999,
+      "label": "不限次"
+    }
+  ]
 }

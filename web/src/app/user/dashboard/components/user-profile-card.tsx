@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Clock, Copy, LoaderCircle, User } from "lucide-react";
+import { AlertTriangle, Clock, Copy, HeartPulse, LoaderCircle, ShieldAlert, User } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -39,6 +39,8 @@ type UserProfile = {
   last_used_at?: string | null;
   owner_name?: string | null;
   display_key?: string | null;
+  health_limit?: number | null;
+  health_violations?: number | null;
 };
 
 export function UserProfileCard() {
@@ -91,6 +93,12 @@ export function UserProfileCard() {
   const remainingDays = typeof profile.remaining_days === "number" ? profile.remaining_days : null;
   const ownerName = profile.owner_name || (profile.owner_id ? "代理已删除" : "未分配");
   const displayKey = String(profile.display_key || "").trim();
+
+  // Health check
+  const healthLimit = typeof profile.health_limit === "number" ? profile.health_limit : 5;
+  const healthViolations = typeof profile.health_violations === "number" ? profile.health_violations : 0;
+  const healthRemaining = healthLimit > 0 ? Math.max(0, healthLimit - healthViolations) : -1;
+  const healthPercent = healthLimit > 0 ? Math.min(100, Math.round((healthViolations / healthLimit) * 100)) : 0;
 
   const handleCopy = async (value: string) => {
     try {
@@ -161,6 +169,22 @@ export function UserProfileCard() {
               {remainingDays <= 0
                 ? "试用已到期，请联系管理员升级。"
                 : `试用将于明天到期，请尽快联系管理员。`}
+            </span>
+          </div>
+        )}
+
+        {/* Health violation warning */}
+        {healthLimit > 0 && healthRemaining <= 2 && healthRemaining >= 0 && (
+          <div className={`flex items-center gap-3 rounded-xl border px-4 py-3 text-sm ${
+            healthRemaining === 0
+              ? "border-rose-200 bg-rose-50 text-rose-800"
+              : "border-amber-200 bg-amber-50 text-amber-800"
+          }`}>
+            <ShieldAlert className="size-4 shrink-0" />
+            <span>
+              {healthRemaining === 0
+                ? "健康检测次数已耗尽，账号已被禁用，请联系管理员。"
+                : `健康检测仅剩 ${healthRemaining} 次机会，请注意输入内容。`}
             </span>
           </div>
         )}
@@ -243,6 +267,30 @@ export function UserProfileCard() {
             />
           </div>
         </div>
+
+        {/* Health check progress */}
+        {healthLimit > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-sm">
+              <span className="flex items-center gap-1.5 font-medium text-stone-700">
+                <HeartPulse className="size-4" />
+                健康检测
+              </span>
+              <span className={healthRemaining <= 2 ? "font-medium text-rose-600" : "text-stone-500"}>
+                剩余 {healthRemaining} / {healthLimit}
+              </span>
+            </div>
+            <div className="h-2.5 w-full overflow-hidden rounded-full bg-stone-100">
+              <div
+                className={`h-full rounded-full transition-all duration-300 ${
+                  healthPercent >= 80 ? "bg-rose-500" : healthPercent >= 50 ? "bg-amber-500" : "bg-emerald-500"
+                }`}
+                style={{ width: `${healthPercent}%` }}
+              />
+            </div>
+            <p className="text-xs text-stone-500">输入包含敏感词的提示词会被记录，次数耗尽后账号将被禁用。</p>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from api.support import require_identity, resolve_image_base_url
 from services.auth_service import auth_service
-from services.content_filter import check_request, request_text
+from services.content_filter import check_request, find_sensitive_words, request_text
 from services.log_service import LoggedCall
 from services.protocol import (
     anthropic_v1_messages,
@@ -55,11 +55,33 @@ class AnthropicMessageRequest(BaseModel):
     stream: bool | None = None
 
 
-async def filter_or_log(call: LoggedCall, text: str) -> None:
+async def filter_or_log(call: LoggedCall, text: str, identity: dict[str, object] | None = None) -> None:
     try:
         await run_in_threadpool(check_request, text)
     except HTTPException as exc:
         call.log("调用失败", status="failed", error=str(exc.detail))
+        if identity and identity.get("role") == "user":
+            matched = find_sensitive_words(text)
+            if matched:
+                result = auth_service.record_health_violation(str(identity.get("id")), matched, text)
+                if result:
+                    remaining = result.get("remaining", -1)
+                    disabled = result.get("disabled", False)
+                    violations = result.get("violations", 0)
+                    health_limit = result.get("health_limit", 5)
+                    msg = f"检测到敏感词，拒绝本次任务。健康检测：{violations}/{health_limit}"
+                    if disabled:
+                        msg += "，账号已被禁用，请联系管理员"
+                    elif remaining >= 0:
+                        msg += f"，剩余 {remaining} 次机会"
+                    raise HTTPException(status_code=400, detail={
+                        "error": msg,
+                        "code": "health_violation",
+                        "health_violations": violations,
+                        "health_limit": health_limit,
+                        "health_remaining": remaining,
+                        "health_disabled": disabled,
+                    })
         raise
 
 
@@ -86,7 +108,7 @@ def create_router() -> APIRouter:
     ):
         identity = require_identity(authorization, x_session_id)
         call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图", request_text=body.prompt)
-        await filter_or_log(call, body.prompt)
+        await filter_or_log(call, body.prompt, identity)
         if identity.get("role") == "user":
             ok, _ = auth_service.check_and_increment_monthly_usage(str(identity.get("id")), body.n)
             if not ok:
@@ -114,7 +136,7 @@ def create_router() -> APIRouter:
         if n < 1 or n > 4:
             raise HTTPException(status_code=400, detail={"error": "n must be between 1 and 4"})
         call = LoggedCall(identity, "/v1/images/edits", model, "图生图", request_text=prompt)
-        await filter_or_log(call, prompt)
+        await filter_or_log(call, prompt, identity)
         uploads = [*(image or []), *(image_list or [])]
         if not uploads:
             raise HTTPException(status_code=400, detail={"error": "image file is required"})
@@ -152,7 +174,7 @@ def create_router() -> APIRouter:
         model = str(payload.get("model") or "auto")
         request_preview = request_text(payload.get("prompt"), payload.get("messages"))
         call = LoggedCall(identity, "/v1/chat/completions", model, "文本生成", request_text=request_preview)
-        await filter_or_log(call, request_preview)
+        await filter_or_log(call, request_preview, identity)
         return await call.run(openai_v1_chat_complete.handle, payload)
 
     @router.post("/v1/responses")
@@ -166,7 +188,7 @@ def create_router() -> APIRouter:
         model = str(payload.get("model") or "auto")
         request_preview = request_text(payload.get("input"), payload.get("instructions"))
         call = LoggedCall(identity, "/v1/responses", model, "Responses", request_text=request_preview)
-        await filter_or_log(call, request_preview)
+        await filter_or_log(call, request_preview, identity)
         return await call.run(openai_v1_response.handle, payload)
 
     @router.post("/v1/messages")
@@ -182,7 +204,7 @@ def create_router() -> APIRouter:
         model = str(payload.get("model") or "auto")
         request_preview = request_text(payload.get("system"), payload.get("messages"), payload.get("tools"))
         call = LoggedCall(identity, "/v1/messages", model, "Messages", request_text=request_preview)
-        await filter_or_log(call, request_preview)
+        await filter_or_log(call, request_preview, identity)
         return await call.run(anthropic_v1_messages.handle, payload, sse="anthropic")
 
     return router

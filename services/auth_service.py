@@ -16,6 +16,8 @@ AuthRole = Literal["admin", "reseller", "user"]
 DEFAULT_USER_KEY_VALID_DAYS = 30
 DEFAULT_USER_MAX_SESSIONS = 4
 USER_SESSION_IDLE_DAYS = 7
+DEFAULT_HEALTH_LIMIT = 5
+MAX_HEALTH_VIOLATION_LOG = 10
 
 
 class AuthError(Exception):
@@ -126,6 +128,16 @@ class AuthService:
             except (TypeError, ValueError):
                 result["monthly_usage"] = 0
             result["monthly_reset_at"] = self._clean(raw.get("monthly_reset_at")) or None
+            try:
+                result["health_limit"] = max(0, int(raw.get("health_limit", DEFAULT_HEALTH_LIMIT)))
+            except (TypeError, ValueError):
+                result["health_limit"] = DEFAULT_HEALTH_LIMIT
+            try:
+                result["health_violations"] = max(0, int(raw.get("health_violations", 0)))
+            except (TypeError, ValueError):
+                result["health_violations"] = 0
+            violation_log = raw.get("health_violation_log")
+            result["health_violation_log"] = violation_log if isinstance(violation_log, list) else []
         return result
 
     def _normalize_session(self, raw: object) -> dict[str, object] | None:
@@ -229,6 +241,9 @@ class AuthService:
             result["monthly_limit"] = item.get("monthly_limit", 0)
             result["monthly_usage"] = item.get("monthly_usage", 0)
             result["monthly_reset_at"] = item.get("monthly_reset_at")
+            result["health_limit"] = item.get("health_limit", DEFAULT_HEALTH_LIMIT)
+            result["health_violations"] = item.get("health_violations", 0)
+            result["health_violation_log"] = item.get("health_violation_log", [])
         if extra:
             result.update(extra)
         return result
@@ -333,6 +348,7 @@ class AuthService:
         is_trial: bool | None = None,
         tier: str | None = None,
         monthly_limit: int | None = None,
+        health_limit: int | None = None,
     ) -> tuple[dict[str, object], str]:
         with self._lock:
             self._reload_locked()
@@ -400,6 +416,12 @@ class AuthService:
                     item["monthly_limit"] = 0
                 item["monthly_usage"] = 0
                 item["monthly_reset_at"] = None
+                try:
+                    item["health_limit"] = max(0, int(health_limit) if health_limit is not None else DEFAULT_HEALTH_LIMIT)
+                except (TypeError, ValueError):
+                    item["health_limit"] = DEFAULT_HEALTH_LIMIT
+                item["health_violations"] = 0
+                item["health_violation_log"] = []
             self._items.append(item)
             self._save()
             return self._public_item(item, remaining_days=self._compute_remaining_days(item)), raw_key
@@ -492,6 +514,11 @@ class AuthService:
                         next_item["monthly_reset_at"] = self._clean(updates.get("monthly_reset_at")) or None
                     if "owner_id" in updates and updates.get("owner_id") is not None:
                         next_item["owner_id"] = self._clean(updates.get("owner_id"))
+                    if "health_limit" in updates and updates.get("health_limit") is not None:
+                        try:
+                            next_item["health_limit"] = max(0, int(updates.get("health_limit")))
+                        except (TypeError, ValueError):
+                            raise ValueError("健康检测次数格式不正确") from None
                 next_item, _ = self._prune_sessions_locked(next_item)
                 self._items[index] = next_item
                 if current_role == "reseller" and updates.get("enabled") is False:
@@ -769,6 +796,66 @@ class AuthService:
                 else:
                     public["owner_name"] = "未分配"
                 return public
+        return None
+
+    def record_health_violation(self, key_id: str, matched_words: list[str], prompt: str = "") -> dict[str, object] | None:
+        normalized_id = self._clean(key_id)
+        if not normalized_id:
+            return None
+        with self._lock:
+            self._reload_locked()
+            for index, item in enumerate(self._items):
+                if item.get("id") != normalized_id:
+                    continue
+                if item.get("role") != "user":
+                    return None
+                next_item = dict(item)
+                violations = int(next_item.get("health_violations") or 0) + 1
+                next_item["health_violations"] = violations
+                violation_log = list(next_item.get("health_violation_log") or [])
+                violation_log.append({
+                    "words": matched_words,
+                    "prompt": str(prompt or "")[:200],
+                    "time": _now_iso(),
+                })
+                if len(violation_log) > MAX_HEALTH_VIOLATION_LOG:
+                    violation_log = violation_log[-MAX_HEALTH_VIOLATION_LOG:]
+                next_item["health_violation_log"] = violation_log
+                health_limit = int(next_item.get("health_limit") or DEFAULT_HEALTH_LIMIT)
+                disabled = False
+                if health_limit > 0 and violations >= health_limit:
+                    next_item["enabled"] = False
+                    next_item["sessions"] = []
+                    next_item["sessions_revoked_at"] = _now_iso()
+                    disabled = True
+                self._items[index] = next_item
+                self._save()
+                return {
+                    "violations": violations,
+                    "health_limit": health_limit,
+                    "remaining": max(0, health_limit - violations) if health_limit > 0 else -1,
+                    "disabled": disabled,
+                }
+        return None
+
+    def reset_health_violations(self, key_id: str, *, role: AuthRole | None = None) -> dict[str, object] | None:
+        normalized_id = self._clean(key_id)
+        if not normalized_id:
+            return None
+        with self._lock:
+            self._reload_locked()
+            for index, item in enumerate(self._items):
+                if item.get("id") != normalized_id:
+                    continue
+                if role is not None and item.get("role") != role:
+                    return None
+                next_item = dict(item)
+                next_item["health_violations"] = 0
+                next_item["health_violation_log"] = []
+                next_item["enabled"] = True
+                self._items[index] = next_item
+                self._save()
+                return self._public_item(next_item, remaining_days=self._compute_remaining_days(next_item))
         return None
 
     def count_trial_keys(self, reseller_id: str) -> int:

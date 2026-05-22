@@ -1003,6 +1003,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
 
       } catch (error) {
         const message = error instanceof Error ? error.message : "生成图片失败";
+        const errorCode = error instanceof Error ? (error as Error & { code?: string }).code : undefined;
         await updateConversation(conversationId, (current) => {
           const conversation = current ?? snapshot;
           return {
@@ -1022,7 +1023,11 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
             ),
           };
         });
-        toast.error(message);
+        if (errorCode === "health_violation") {
+          toast.error(message, { duration: 8000 });
+        } else {
+          toast.error(message);
+        }
       } finally {
         activeConversationQueueIds.delete(conversationId);
         for (const conversation of conversationsRef.current) {

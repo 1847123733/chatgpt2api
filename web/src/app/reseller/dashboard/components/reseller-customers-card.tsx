@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Ban, CheckCircle2, Copy, KeyRound, LoaderCircle, LogOut, Pencil, Plus, UserPlus } from "lucide-react";
+import { Ban, CheckCircle2, Copy, HeartPulse, KeyRound, LoaderCircle, LogOut, Pencil, Plus, ShieldAlert, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -22,6 +22,7 @@ import {
   createResellerCustomer,
   clearResellerCustomerSessions,
   fetchResellerCustomers,
+  resetResellerCustomerHealth,
   updateResellerCustomer,
   type ResellerCustomer,
 } from "@/lib/api";
@@ -78,6 +79,7 @@ export function ResellerCustomersCard() {
   const [createTier, setCreateTier] = useState("200");
   const [createValidDays, setCreateValidDays] = useState("30");
   const [createMaxSessions, setCreateMaxSessions] = useState("4");
+  const [createHealthLimit, setCreateHealthLimit] = useState("5");
   const [isCreating, setIsCreating] = useState(false);
 
   // Edit dialog
@@ -85,6 +87,7 @@ export function ResellerCustomersCard() {
   const [editName, setEditName] = useState("");
   const [editTier, setEditTier] = useState("200");
   const [editMaxSessions, setEditMaxSessions] = useState("4");
+  const [editHealthLimit, setEditHealthLimit] = useState("5");
 
   // Renew dialog
   const [renewingItem, setRenewingItem] = useState<ResellerCustomer | null>(null);
@@ -133,6 +136,7 @@ export function ResellerCustomersCard() {
         createIsTrial ? "trial" : createTier,
         createIsTrial ? 1 : validDays,
         Math.max(1, Math.floor(Number(createMaxSessions) || 4)),
+        Math.max(0, Math.floor(Number(createHealthLimit) || 5)),
       );
       setItems((prev) => [...prev, data.item]);
       setRevealedKey(data.key);
@@ -141,6 +145,7 @@ export function ResellerCustomersCard() {
       setCreateTier("200");
       setCreateValidDays("30");
       setCreateMaxSessions("4");
+      setCreateHealthLimit("5");
       setIsCreateOpen(false);
       notifyCustomersChanged();
       toast.success("客户已创建");
@@ -170,6 +175,7 @@ export function ResellerCustomersCard() {
     setEditName(item.name);
     setEditTier(item.tier || "200");
     setEditMaxSessions(String(Math.max(1, Number(item.max_sessions) || 4)));
+    setEditHealthLimit(String(Math.max(0, Number(item.health_limit) ?? 5)));
   };
 
   const handleEdit = async () => {
@@ -181,6 +187,7 @@ export function ResellerCustomersCard() {
         name: editName.trim(),
         tier: editTier,
         max_sessions: Math.max(1, Math.floor(Number(editMaxSessions) || 4)),
+        health_limit: Math.max(0, Math.floor(Number(editHealthLimit) || 5)),
       });
       setItems((prev) => prev.map((i) => (i.id === item.id ? data.item : i)));
       setEditingItem(null);
@@ -239,6 +246,20 @@ export function ResellerCustomersCard() {
       toast.success("已清空在线会话");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "清空在线会话失败");
+    } finally {
+      setItemPending(item.id, false);
+    }
+  };
+
+  const handleResetHealth = async (item: ResellerCustomer) => {
+    setItemPending(item.id, true);
+    try {
+      const data = await resetResellerCustomerHealth(item.id);
+      setItems((prev) => prev.map((i) => (i.id === item.id ? data.item : i)));
+      notifyCustomersChanged();
+      toast.success("已重置健康检测");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "重置健康检测失败");
     } finally {
       setItemPending(item.id, false);
     }
@@ -311,6 +332,19 @@ export function ResellerCustomersCard() {
                         <Badge variant={item.enabled ? "success" : "secondary"} className="rounded-md">
                           {item.enabled ? "已启用" : "已禁用"}
                         </Badge>
+                        {(() => {
+                          const hLimit = Number(item.health_limit) ?? 5;
+                          const hViolations = Number(item.health_violations) || 0;
+                          if (hLimit > 0 && hViolations > 0) {
+                            return (
+                              <Badge variant={hViolations >= hLimit ? "danger" : hViolations >= hLimit - 2 ? "warning" : "outline"} className="rounded-md">
+                                <ShieldAlert className="mr-1 size-3" />
+                                健康 {hViolations}/{hLimit}
+                              </Badge>
+                            );
+                          }
+                          return null;
+                        })()}
                       </div>
                       <div className="flex max-w-3xl flex-col gap-2 rounded-lg bg-stone-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                         <code className={`break-all font-mono text-[12px] ${displayKey ? "text-stone-700" : "text-stone-400"}`}>
@@ -333,6 +367,10 @@ export function ResellerCustomersCard() {
                         <span>剩余 {formatRemainingDays(item.remaining_days)}</span>
                         <span>到期 {formatDateTime(item.expires_at)}</span>
                         <span>在线数 {activeSessions} / {Math.max(1, Number(item.max_sessions) || 4)}</span>
+                        <span className="flex items-center gap-1">
+                          <HeartPulse className="size-3" />
+                          健康 {Number(item.health_violations) || 0}/{Number(item.health_limit) ?? 5}
+                        </span>
                       </div>
                     </div>
 
@@ -347,6 +385,18 @@ export function ResellerCustomersCard() {
                         {isPending ? <LoaderCircle className="size-4 animate-spin" /> : <LogOut className="size-4" />}
                         一键清空在线
                       </Button>
+                      {(Number(item.health_violations) || 0) > 0 && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-9 rounded-xl border-rose-200 bg-white px-4 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                          onClick={() => void handleResetHealth(item)}
+                          disabled={isPending}
+                        >
+                          {isPending ? <LoaderCircle className="size-4 animate-spin" /> : <HeartPulse className="size-4" />}
+                          重置健康
+                        </Button>
+                      )}
                       {item.is_trial && (
                         <Button
                           type="button"
@@ -447,6 +497,11 @@ export function ResellerCustomersCard() {
               <label className="text-sm font-medium text-stone-700">同时在线数</label>
               <Input value={createMaxSessions} type="number" min="1" max="100" step="1" onChange={(e) => setCreateMaxSessions(e.target.value)} placeholder="4" className="h-11 rounded-xl border-stone-200 bg-white" />
             </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-stone-700">健康检测次数</label>
+              <Input value={createHealthLimit} type="number" min="0" max="999" step="1" onChange={(e) => setCreateHealthLimit(e.target.value)} placeholder="5" className="h-11 rounded-xl border-stone-200 bg-white" />
+              <p className="text-xs text-stone-500">默认 5 次。输入敏感词会扣减，耗尽后账号自动禁用。设为 0 则不限制。</p>
+            </div>
           </div>
           <DialogFooter>
             <Button type="button" variant="secondary" className="h-10 rounded-xl bg-stone-100 px-5 text-stone-700 hover:bg-stone-200" onClick={() => setIsCreateOpen(false)} disabled={isCreating}>取消</Button>
@@ -488,6 +543,11 @@ export function ResellerCustomersCard() {
             <div className="space-y-2">
               <label className="text-sm font-medium text-stone-700">同时在线数</label>
               <Input value={editMaxSessions} type="number" min="1" max="100" step="1" onChange={(e) => setEditMaxSessions(e.target.value)} className="h-11 rounded-xl border-stone-200 bg-white" />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-stone-700">健康检测次数</label>
+              <Input value={editHealthLimit} type="number" min="0" max="999" step="1" onChange={(e) => setEditHealthLimit(e.target.value)} placeholder="5" className="h-11 rounded-xl border-stone-200 bg-white" />
+              <p className="text-xs text-stone-500">输入敏感词会扣减，耗尽后账号自动禁用。设为 0 则不限制。</p>
             </div>
           </div>
           <DialogFooter>

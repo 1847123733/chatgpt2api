@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Ban, CheckCircle2, Copy, KeyRound, LoaderCircle, LogOut, Pencil, Plus, Trash2 } from "lucide-react";
+import { Ban, CheckCircle2, Copy, HeartPulse, KeyRound, LoaderCircle, LogOut, Pencil, Plus, ShieldAlert, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -16,7 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { clearUserKeySessions, createUserKey, deleteUserKey, fetchUserKeys, updateUserKey, type UserKey } from "@/lib/api";
+import { clearUserKeySessions, createUserKey, deleteUserKey, fetchUserKeys, resetUserKeyHealth, updateUserKey, type UserKey } from "@/lib/api";
 
 function formatDateTime(value?: string | null) {
   if (!value) {
@@ -51,6 +51,7 @@ export function UserKeysCard() {
   const [name, setName] = useState("");
   const [validDays, setValidDays] = useState("30");
   const [maxSessions, setMaxSessions] = useState("4");
+  const [healthLimit, setHealthLimit] = useState("5");
   const [isCreating, setIsCreating] = useState(false);
   const [pendingIds, setPendingIds] = useState<Set<string>>(() => new Set());
   const [revealedKey, setRevealedKey] = useState("");
@@ -59,6 +60,7 @@ export function UserKeysCard() {
   const [editName, setEditName] = useState("");
   const [editKey, setEditKey] = useState("");
   const [editMaxSessions, setEditMaxSessions] = useState("4");
+  const [editHealthLimit, setEditHealthLimit] = useState("5");
   const [renewingItem, setRenewingItem] = useState<UserKey | null>(null);
   const [renewDays, setRenewDays] = useState("30");
   const [originFilter, setOriginFilter] = useState<"admin" | "reseller">("admin");
@@ -92,11 +94,13 @@ export function UserKeysCard() {
     try {
       const days = Math.max(1, Math.floor(Number(validDays) || 30));
       const sessions = Math.max(1, Math.floor(Number(maxSessions) || 4));
-      const data = await createUserKey(name.trim(), days, sessions);
+      const health = Math.max(0, Math.floor(Number(healthLimit) || 5));
+      const data = await createUserKey(name.trim(), days, sessions, health);
       setItems(data.items);
       setRevealedKey(data.key);
       setName("");
       setMaxSessions("4");
+      setHealthLimit("5");
       setIsDialogOpen(false);
       toast.success("用户密钥已创建");
     } catch (error) {
@@ -154,6 +158,7 @@ export function UserKeysCard() {
     setEditName(item.name);
     setEditKey("");
     setEditMaxSessions(String(Math.max(1, Number(item.max_sessions) || 4)));
+    setEditHealthLimit(String(Math.max(0, Number(item.health_limit) ?? 5)));
   };
 
   const handleEdit = async () => {
@@ -164,7 +169,9 @@ export function UserKeysCard() {
     const trimmedName = editName.trim();
     const trimmedKey = editKey.trim();
     const normalizedMaxSessions = Math.max(1, Math.floor(Number(editMaxSessions) || 4));
-    if (trimmedName === item.name && !trimmedKey && normalizedMaxSessions === Math.max(1, Number(item.max_sessions) || 4)) {
+    const normalizedHealthLimit = Math.max(0, Math.floor(Number(editHealthLimit) || 5));
+    const currentHealthLimit = Math.max(0, Number(item.health_limit) ?? 5);
+    if (trimmedName === item.name && !trimmedKey && normalizedMaxSessions === Math.max(1, Number(item.max_sessions) || 4) && normalizedHealthLimit === currentHealthLimit) {
       setEditingItem(null);
       return;
     }
@@ -174,6 +181,7 @@ export function UserKeysCard() {
         ...(trimmedName !== item.name ? { name: trimmedName } : {}),
         ...(trimmedKey ? { key: trimmedKey } : {}),
         ...(normalizedMaxSessions !== Math.max(1, Number(item.max_sessions) || 4) ? { max_sessions: normalizedMaxSessions } : {}),
+        ...(normalizedHealthLimit !== currentHealthLimit ? { health_limit: normalizedHealthLimit } : {}),
       });
       setItems(data.items);
       setEditingItem(null);
@@ -213,6 +221,19 @@ export function UserKeysCard() {
       toast.success("已清空在线会话");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "清空在线会话失败");
+    } finally {
+      setItemPending(item.id, false);
+    }
+  };
+
+  const handleResetHealth = async (item: UserKey) => {
+    setItemPending(item.id, true);
+    try {
+      const data = await resetUserKeyHealth(item.id);
+      setItems(data.items);
+      toast.success("已重置健康检测");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "重置健康检测失败");
     } finally {
       setItemPending(item.id, false);
     }
@@ -309,6 +330,19 @@ export function UserKeysCard() {
                         <Badge variant={item.enabled ? "success" : "secondary"} className="rounded-md">
                           {item.enabled ? "已启用" : "已禁用"}
                         </Badge>
+                        {(() => {
+                          const hLimit = Number(item.health_limit) ?? 5;
+                          const hViolations = Number(item.health_violations) || 0;
+                          if (hLimit > 0 && hViolations > 0) {
+                            return (
+                              <Badge variant={hViolations >= hLimit ? "danger" : hViolations >= hLimit - 2 ? "warning" : "outline"} className="rounded-md">
+                                <ShieldAlert className="mr-1 size-3" />
+                                健康 {hViolations}/{hLimit}
+                              </Badge>
+                            );
+                          }
+                          return null;
+                        })()}
                         {item.owner_id ? (
                           <Badge variant="info" className="rounded-md">
                             {item.owner_name || "代理已删除"}
@@ -340,6 +374,10 @@ export function UserKeysCard() {
                         <span>过期时间 {formatDateTime(item.expires_at)}</span>
                         <span>剩余 {formatRemainingDays(item.remaining_days)}</span>
                         <span>在线中 {activeSessions} / {Math.max(1, Number(item.max_sessions) || 4)}</span>
+                        <span className="flex items-center gap-1">
+                          <HeartPulse className="size-3" />
+                          健康 {Number(item.health_violations) || 0}/{Number(item.health_limit) ?? 5}
+                        </span>
                       </div>
                     </div>
 
@@ -354,6 +392,18 @@ export function UserKeysCard() {
                         {isPending ? <LoaderCircle className="size-4 animate-spin" /> : <LogOut className="size-4" />}
                         一键清空在线
                       </Button>
+                      {(Number(item.health_violations) || 0) > 0 && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-9 rounded-xl border-rose-200 bg-white px-4 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                          onClick={() => void handleResetHealth(item)}
+                          disabled={isPending}
+                        >
+                          {isPending ? <LoaderCircle className="size-4 animate-spin" /> : <HeartPulse className="size-4" />}
+                          重置健康
+                        </Button>
+                      )}
                       <Button
                         type="button"
                         variant="outline"
@@ -457,6 +507,20 @@ export function UserKeysCard() {
                 className="h-11 rounded-xl border-stone-200 bg-white"
               />
               <p className="text-xs leading-5 text-stone-500">默认 30 天，可调整。到期后会自动禁用。</p>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-stone-700">健康检测次数</label>
+              <Input
+                value={healthLimit}
+                type="number"
+                min="0"
+                max="999"
+                step="1"
+                onChange={(event) => setHealthLimit(event.target.value)}
+                placeholder="5"
+                className="h-11 rounded-xl border-stone-200 bg-white"
+              />
+              <p className="text-xs leading-5 text-stone-500">默认 5 次。输入敏感词会扣减，耗尽后账号自动禁用。设为 0 则不限制。</p>
             </div>
           </div>
           <DialogFooter>
@@ -566,6 +630,20 @@ export function UserKeysCard() {
               />
               <p className="text-xs leading-5 text-stone-500">调整后会立即影响后续登录，当前已在线会话不会被自动踢下线。</p>
             </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-stone-700">健康检测次数</label>
+              <Input
+                value={editHealthLimit}
+                type="number"
+                min="0"
+                max="999"
+                step="1"
+                onChange={(event) => setEditHealthLimit(event.target.value)}
+                placeholder="5"
+                className="h-11 rounded-xl border-stone-200 bg-white"
+              />
+              <p className="text-xs leading-5 text-stone-500">输入敏感词会扣减，耗尽后账号自动禁用。设为 0 则不限制。</p>
+            </div>
           </div>
           <DialogFooter>
             <Button
@@ -576,6 +654,7 @@ export function UserKeysCard() {
                 setEditingItem(null);
                 setEditKey("");
                 setEditMaxSessions("4");
+                setEditHealthLimit("5");
               }}
               disabled={editingItem ? pendingIds.has(editingItem.id) : false}
             >

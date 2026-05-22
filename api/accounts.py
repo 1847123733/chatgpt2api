@@ -31,6 +31,7 @@ class UserKeyCreateRequest(BaseModel):
     name: str = ""
     valid_days: int = 30
     max_sessions: int = 4
+    health_limit: int = 5
 
 
 class ResellerKeyCreateRequest(BaseModel):
@@ -69,6 +70,7 @@ class UserKeyUpdateRequest(BaseModel):
     valid_days: int | None = None
     renew_days: int | None = None
     max_sessions: int | None = None
+    health_limit: int | None = None
 
 
 class AccountCreateRequest(BaseModel):
@@ -168,6 +170,7 @@ def create_router() -> APIRouter:
                 name=body.name,
                 valid_days=body.valid_days,
                 max_sessions=body.max_sessions,
+                health_limit=body.health_limit,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
@@ -189,6 +192,7 @@ def create_router() -> APIRouter:
                 "valid_days": body.valid_days,
                 "renew_days": body.renew_days,
                 "max_sessions": body.max_sessions,
+                "health_limit": body.health_limit,
             }.items()
             if value is not None
         }
@@ -206,6 +210,14 @@ def create_router() -> APIRouter:
     async def clear_user_key_sessions(key_id: str, authorization: str | None = Header(default=None)):
         require_admin(authorization)
         item = auth_service.clear_key_sessions(key_id, role="user")
+        if item is None:
+            raise HTTPException(status_code=404, detail={"error": "这条用户密钥不存在，可能已经被删除"})
+        return {"item": item, "items": _with_user_owner_names(auth_service.list_keys(role="user"))}
+
+    @router.post("/api/auth/users/{key_id}/reset-health")
+    async def reset_user_health(key_id: str, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        item = auth_service.reset_health_violations(key_id, role="user")
         if item is None:
             raise HTTPException(status_code=404, detail={"error": "这条用户密钥不存在，可能已经被删除"})
         return {"item": item, "items": _with_user_owner_names(auth_service.list_keys(role="user"))}

@@ -30,6 +30,13 @@ def check_request(text: str) -> None:
     for word in config.sensitive_words:
         if word in text:
             raise HTTPException(status_code=400, detail={"error": "检测到敏感词，拒绝本次任务"})
+
+
+def find_sensitive_words(text: str) -> list[str]:
+    text = str(text or "")
+    if not text:
+        return []
+    return [word for word in config.sensitive_words if word in text]
     review = config.ai_review
     if not review.get("enabled"):
         return

@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from api.support import require_identity, resolve_image_base_url
 from services.auth_service import auth_service
-from services.content_filter import check_request
+from services.content_filter import check_request, find_sensitive_words
 from services.image_task_service import ImageTaskQuotaError, image_task_service
 from services.log_service import LoggedCall
 
@@ -22,11 +22,33 @@ def _parse_task_ids(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-async def filter_or_log(call: LoggedCall, text: str) -> None:
+async def filter_or_log(call: LoggedCall, text: str, identity: dict[str, object] | None = None) -> None:
     try:
         await run_in_threadpool(check_request, text)
     except HTTPException as exc:
         call.log("调用失败", status="failed", error=str(exc.detail))
+        if identity and identity.get("role") == "user":
+            matched = find_sensitive_words(text)
+            if matched:
+                result = auth_service.record_health_violation(str(identity.get("id")), matched, text)
+                if result:
+                    remaining = result.get("remaining", -1)
+                    disabled = result.get("disabled", False)
+                    violations = result.get("violations", 0)
+                    health_limit = result.get("health_limit", 5)
+                    msg = f"检测到敏感词，拒绝本次任务。健康检测：{violations}/{health_limit}"
+                    if disabled:
+                        msg += "，账号已被禁用，请联系管理员"
+                    elif remaining >= 0:
+                        msg += f"，剩余 {remaining} 次机会"
+                    raise HTTPException(status_code=400, detail={
+                        "error": msg,
+                        "code": "health_violation",
+                        "health_violations": violations,
+                        "health_limit": health_limit,
+                        "health_remaining": remaining,
+                        "health_disabled": disabled,
+                    })
         raise
 
 
@@ -54,7 +76,7 @@ def create_router() -> APIRouter:
             ok, _ = auth_service.check_monthly_usage_available(str(identity.get("id")))
             if not ok:
                 raise HTTPException(status_code=429, detail={"error": "本月图片生成额度已用完", "code": "monthly_limit_exceeded"})
-        await filter_or_log(LoggedCall(identity, "/api/image-tasks/generations", body.model, "文生图任务", request_text=body.prompt), body.prompt)
+        await filter_or_log(LoggedCall(identity, "/api/image-tasks/generations", body.model, "文生图任务", request_text=body.prompt), body.prompt, identity)
         try:
             return await run_in_threadpool(
                 image_task_service.submit_generation,
@@ -87,7 +109,7 @@ def create_router() -> APIRouter:
             ok, _ = auth_service.check_monthly_usage_available(str(identity.get("id")))
             if not ok:
                 raise HTTPException(status_code=429, detail={"error": "本月图片生成额度已用完", "code": "monthly_limit_exceeded"})
-        await filter_or_log(LoggedCall(identity, "/api/image-tasks/edits", model, "图生图任务", request_text=prompt), prompt)
+        await filter_or_log(LoggedCall(identity, "/api/image-tasks/edits", model, "图生图任务", request_text=prompt), prompt, identity)
         uploads = [*(image or []), *(image_list or [])]
         if not uploads:
             raise HTTPException(status_code=400, detail={"error": "image file is required"})

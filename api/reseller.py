@@ -20,6 +20,7 @@ class ResellerCustomerCreateRequest(BaseModel):
     tier: str = "100"
     valid_days: int = 30
     max_sessions: int = 4
+    health_limit: int = 5
 
 
 class ResellerCustomerUpdateRequest(BaseModel):
@@ -30,6 +31,7 @@ class ResellerCustomerUpdateRequest(BaseModel):
     renew_days: int | None = None
     max_sessions: int | None = None
     tier: str | None = None
+    health_limit: int | None = None
 
 
 class ConvertTrialRequest(BaseModel):
@@ -119,6 +121,7 @@ def create_router() -> APIRouter:
                 is_trial=is_trial,
                 tier=tier_name,
                 monthly_limit=monthly_limit,
+                health_limit=body.health_limit,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
@@ -140,7 +143,7 @@ def create_router() -> APIRouter:
     ):
         identity = require_reseller(authorization, session_id)
         updates = {}
-        for field in ("name", "enabled", "key", "valid_days", "renew_days", "max_sessions"):
+        for field in ("name", "enabled", "key", "valid_days", "renew_days", "max_sessions", "health_limit"):
             value = getattr(body, field, None)
             if value is not None:
                 updates[field] = value
@@ -202,6 +205,24 @@ def create_router() -> APIRouter:
         if identity.get("role") != "admin" and customer.get("owner_id") != str(identity.get("id")):
             raise HTTPException(status_code=403, detail={"error": "无权操作此客户"})
         result = auth_service.clear_key_sessions(customer_id, role="user")
+        if result is None:
+            raise HTTPException(status_code=404, detail={"error": "客户不存在"})
+        return {"item": result}
+
+    @router.post("/api/reseller/customers/{customer_id}/reset-health")
+    def reset_customer_health(
+        customer_id: str,
+        authorization: str | None = Header(None),
+        session_id: str | None = Header(default=None, alias="x-session-id"),
+    ):
+        identity = require_reseller(authorization, session_id)
+        items = auth_service.list_keys(role="user")
+        customer = next((i for i in items if i.get("id") == customer_id), None)
+        if customer is None:
+            raise HTTPException(status_code=404, detail={"error": "客户不存在"})
+        if identity.get("role") != "admin" and customer.get("owner_id") != str(identity.get("id")):
+            raise HTTPException(status_code=403, detail={"error": "无权操作此客户"})
+        result = auth_service.reset_health_violations(customer_id, role="user")
         if result is None:
             raise HTTPException(status_code=404, detail={"error": "客户不存在"})
         return {"item": result}
