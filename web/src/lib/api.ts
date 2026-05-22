@@ -8,10 +8,16 @@ export type AuthRole = "admin" | "reseller" | "user";
 export type Account = {
   access_token: string;
   type: AccountType;
+  export_type?: string | null;
   status: AccountStatus;
   quota: number;
   image_quota_unknown?: boolean;
   email?: string | null;
+  expired?: string | null;
+  id_token?: string | null;
+  account_id?: string | null;
+  last_refresh?: string | null;
+  refresh_token?: string | null;
   user_id?: string | null;
   limits_progress?: Array<{
     feature_name?: string;
@@ -49,6 +55,22 @@ type AccountUpdateResponse = {
   items: Account[];
 };
 
+export type AccountImportPayload = {
+  access_token: string;
+  accessToken?: string;
+  type?: string;
+  export_type?: string;
+  email?: string;
+  expired?: string;
+  id_token?: string;
+  account_id?: string;
+  last_refresh?: string;
+  refresh_token?: string;
+  [key: string]: unknown;
+};
+
+export type AccountExportFormat = "json" | "zip";
+
 export type SettingsConfig = {
   proxy: string;
   base_url?: string;
@@ -70,7 +92,20 @@ export type SettingsConfig = {
   log_levels?: string[];
   backup?: BackupSettings;
   backup_state?: BackupState;
+  image_storage?: ImageStorageSettings;
   [key: string]: unknown;
+};
+
+export type ImageStorageMode = "local" | "webdav" | "both";
+
+export type ImageStorageSettings = {
+  enabled: boolean;
+  mode: ImageStorageMode;
+  webdav_url: string;
+  webdav_username: string;
+  webdav_password: string;
+  webdav_root_path: string;
+  public_base_url: string;
 };
 
 export type BackupInclude = {
@@ -147,6 +182,9 @@ export type ManagedImage = {
   url: string;
   thumbnail_url?: string;
   created_at: string;
+  storage?: "local" | "webdav" | "both" | string;
+  local?: boolean;
+  webdav?: boolean;
   width?: number;
   height?: number;
   tags?: string[];
@@ -432,10 +470,91 @@ export async function toggleUserPromptSquareLike(itemId: string) {
   });
 }
 
-export async function createAccounts(tokens: string[]) {
+export async function fetchPromptSquare(limit = 120, refresh = false) {
+  const params = new URLSearchParams();
+  params.set("limit", String(limit));
+  if (refresh) {
+    params.set("refresh", "true");
+  }
+  return httpRequest<{
+    source: { repo_url: string; readme_url: string; cover_image_url: string };
+    fetched_at: string;
+    total: number;
+    limit: number;
+    items: PromptSquareItem[];
+  }>(`/api/prompt-square?${params.toString()}`);
+}
+
+export async function translatePromptSquareDescriptions(texts: string[]) {
+  return httpRequest<{
+    items: Array<{ text: string; translated_text: string }>;
+  }>("/api/prompt-square/translate", {
+    method: "POST",
+    body: {
+      texts,
+    },
+  });
+}
+
+export async function fetchUserPromptSquare(params: { page?: number; pageSize?: number; category?: string; search?: string } = {}) {
+  const searchParams = new URLSearchParams();
+  searchParams.set("page", String(params.page || 1));
+  searchParams.set("page_size", String(params.pageSize || 24));
+  if (params.category) searchParams.set("category", params.category);
+  if (params.search) searchParams.set("search", params.search);
+  return httpRequest<{
+    source: { name: string; repo_url: string; readme_url: string; cover_image_url: string };
+    fetched_at: string;
+    total: number;
+    page: number;
+    page_size: number;
+    has_more: boolean;
+    items: PromptSquareItem[];
+  }>(`/api/user-prompt-square?${searchParams.toString()}`);
+}
+
+export async function createUserPromptSquareItem(payload: UserPromptSquarePayload) {
+  return httpRequest<{ item: PromptSquareItem }>("/api/user-prompt-square", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function uploadUserPromptSquareImage(file: File) {
+  const formData = new FormData();
+  formData.append("image", file);
+  return httpRequest<{ url: string; path: string }>("/api/user-prompt-square/images", {
+    method: "POST",
+    body: formData,
+  });
+}
+
+export async function updateUserPromptSquareItem(itemId: string, payload: UserPromptSquarePayload) {
+  return httpRequest<{ item: PromptSquareItem }>(`/api/user-prompt-square/${itemId}`, {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function deleteUserPromptSquareItem(itemId: string) {
+  return httpRequest<{ items: PromptSquareItem[] }>(`/api/user-prompt-square/${itemId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function toggleUserPromptSquareLike(itemId: string) {
+  return httpRequest<{ item: PromptSquareItem }>(`/api/user-prompt-square/${itemId}/like`, {
+    method: "POST",
+  });
+}
+
+export async function createAccounts(tokens: string[], accounts: AccountImportPayload[] = []) {
   return httpRequest<AccountMutationResponse>("/api/accounts", {
     method: "POST",
-    body: { tokens },
+    body: {
+      tokens,
+      ...(accounts.length > 0 ? { accounts } : {}),
+    },
   });
 }
 
@@ -451,6 +570,32 @@ export async function refreshAccounts(accessTokens: string[]) {
     method: "POST",
     body: { access_tokens: accessTokens },
   });
+}
+
+function getFilenameFromDisposition(value: unknown, fallback: string) {
+  const disposition = typeof value === "string" ? value : "";
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1].replace(/"/g, ""));
+  }
+  const match = disposition.match(/filename="?([^";]+)"?/i);
+  return match?.[1] || fallback;
+}
+
+export async function exportAccounts(format: AccountExportFormat, accessTokens: string[] = []) {
+  const response = await request.request<Blob>({
+    url: "/api/accounts/export",
+    method: "POST",
+    data: {
+      format,
+      access_tokens: accessTokens,
+    },
+    responseType: "blob",
+  });
+  return {
+    blob: response.data,
+    filename: getFilenameFromDisposition(response.headers["content-disposition"], `codex-accounts.${format}`),
+  };
 }
 
 export async function updateAccount(
@@ -572,6 +717,20 @@ export async function updateSettingsConfig(settings: SettingsConfig) {
 
 export async function testBackupConnection() {
   return httpRequest<{ result: { ok: boolean; status: number } }>("/api/backup/test", {
+    method: "POST",
+    body: {},
+  });
+}
+
+export async function testImageStorageConnection() {
+  return httpRequest<{ result: { ok: boolean; status: number; error?: string | null } }>("/api/image-storage/test", {
+    method: "POST",
+    body: {},
+  });
+}
+
+export async function syncImageStorage() {
+  return httpRequest<{ result: { uploaded: number; skipped: number; failed: number } }>("/api/image-storage/sync", {
     method: "POST",
     body: {},
   });

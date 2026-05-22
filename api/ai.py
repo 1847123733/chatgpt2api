@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
+from api.image_inputs import parse_image_edit_request, read_image_sources
 from api.support import require_identity, resolve_image_base_url
 from services.auth_service import auth_service
 from services.content_filter import check_request, request_text
@@ -101,44 +102,20 @@ def create_router() -> APIRouter:
             request: Request,
             authorization: str | None = Header(default=None),
             x_session_id: str | None = Header(default=None, alias="x-session-id"),
-            image: list[UploadFile] | None = File(default=None),
-            image_list: list[UploadFile] | None = File(default=None, alias="image[]"),
-            prompt: str = Form(...),
-            model: str = Form(default="gpt-image-2"),
-            n: int = Form(default=1),
-            size: str | None = Form(default=None),
-            response_format: str = Form(default="b64_json"),
-            stream: bool | None = Form(default=None),
     ):
         identity = require_identity(authorization, x_session_id)
-        if n < 1 or n > 4:
-            raise HTTPException(status_code=400, detail={"error": "n must be between 1 and 4"})
+        payload, image_sources = await parse_image_edit_request(request)
+        prompt = str(payload["prompt"])
+        model = str(payload["model"])
         call = LoggedCall(identity, "/v1/images/edits", model, "图生图", request_text=prompt)
         await filter_or_log(call, prompt)
-        uploads = [*(image or []), *(image_list or [])]
-        if not uploads:
-            raise HTTPException(status_code=400, detail={"error": "image file is required"})
-        images: list[tuple[bytes, str, str]] = []
-        for upload in uploads:
-            image_data = await upload.read()
-            if not image_data:
-                raise HTTPException(status_code=400, detail={"error": "image file is empty"})
-            images.append((image_data, upload.filename or "image.png", upload.content_type or "image/png"))
+        payload["images"] = await read_image_sources(image_sources)
         if identity.get("role") == "user":
             ok, _ = auth_service.check_and_increment_monthly_usage(str(identity.get("id")), n)
             if not ok:
                 raise HTTPException(status_code=429, detail={"error": f"剩余额度不足，无法生成 {n} 张图片", "code": "monthly_limit_exceeded"})
             call.on_failure = lambda: auth_service.increment_monthly_usage(str(identity.get("id")), -n)
-        payload = {
-            "prompt": prompt,
-            "images": images,
-            "model": model,
-            "n": n,
-            "size": size,
-            "response_format": response_format,
-            "stream": stream,
-            "base_url": resolve_image_base_url(request),
-        }
+        payload["base_url"] = resolve_image_base_url(request)
         return await call.run(openai_v1_image_edit.handle, payload)
 
     @router.post("/v1/chat/completions")
